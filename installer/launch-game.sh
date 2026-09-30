@@ -131,7 +131,17 @@ if [ "$tf_driver" = test ]; then
     fi
     DRIVER=$tf_test_dir
 fi
-print -r -- "DRIVER_SHA256=$(sha256sum "$DRIVER/libvulkan_freedreno.so" 2>/dev/null | cut -d' ' -f1)"
+# GameHub's process wrapper can prepend its own messages, without a newline,
+# to a child's output. Take the last 64 characters of each word and keep the
+# first one that is a full lowercase hex digest.
+tf_hash=unknown
+tf_raw=$(/system/bin/toybox sha256sum "$DRIVER/libvulkan_freedreno.so" 2>/dev/null)
+for tf_word in $tf_raw; do
+    [ "${#tf_word}" -ge 64 ] || continue
+    tf_tail=${tf_word#"${tf_word%????????????????????????????????????????????????????????????????}"}
+    case "$tf_tail" in *[!0-9a-f]*) ;; *) tf_hash=$tf_tail; break ;; esac
+done
+print -r -- "DRIVER_SHA256=$tf_hash"
 export WINEMU_REPLACED_DRIVER="$DRIVER"
 # Mesa's on-disk shader cache is off by default on Android. It only has an
 # effect with a driver built with the shader cache enabled.
