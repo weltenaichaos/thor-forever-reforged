@@ -23,11 +23,13 @@ jobs:
           # The device-tested version, rebuilt here as a baseline.
           - name: '2.4.1'
             dxvk_ref: v2.4.1
-            patch: dxvk-arm64-toolchain.patch
+            patches: dxvk-arm64-toolchain.patch
           # Newer DXVK with lower CPU overhead per draw call.
           - name: '2.7.1'
             dxvk_ref: v2.7.1
-            patch: dxvk-2.7-arm64-toolchain.patch
+            # The second patch restores 2.4's check that the Wine instance
+            # has the surface extensions the presenter's queries need.
+            patches: dxvk-2.7-arm64-toolchain.patch dxvk-2.7-surface-extensions.patch
     env:
       LLVM_MINGW: llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64
     steps:
@@ -54,7 +56,10 @@ jobs:
           git -C dxvk submodule status
 
       - name: Apply patches
-        run: git -C dxvk apply --verbose "$GITHUB_WORKSPACE/patches/${{ matrix.patch }}"
+        run: |
+          for patch in ${{ matrix.patches }}; do
+            git -C dxvk apply --verbose "$GITHUB_WORKSPACE/patches/$patch"
+          done
 
       - name: Configure
         run: |
@@ -99,7 +104,7 @@ jobs:
             echo "repo_commit=$GITHUB_SHA"
             echo "toolchain=$LLVM_MINGW"
             echo "glslang=$(glslangValidator --version | head -1)"
-            echo "patches=${{ matrix.patch }}"
+            echo "patches=${{ matrix.patches }}"
           } > out/BUILD-INFO.txt
           (cd out && sha256sum dxgi.dll d3d11.dll > SHA256SUMS.txt)
           cat out/BUILD-INFO.txt out/SHA256SUMS.txt

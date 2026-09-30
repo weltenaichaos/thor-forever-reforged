@@ -64,7 +64,10 @@ Use native Windows ARM64 DLL outputs, not x64 or ARM64EC substitutions.
 
 `.github/workflows/build-dxvk.yml` rebuilds this baseline and DXVK 2.7.1 on
 GitHub Actions. 2.7.1 needs `patches/dxvk-2.7-arm64-toolchain.patch`, the same
-libc++ fix at its new location. Test a build on the device with `DXVK=test`
+libc++ fix at its new location, and `patches/dxvk-2.7-surface-extensions.patch`,
+which restores 2.4's check that the Wine instance has the surface extensions
+the presenter needs (without it, the swap chain fails with
+`VK_ERROR_EXTENSION_NOT_PRESENT` on the device). Test a build on the device with `DXVK=test`
 in `tuning.conf`.
 
 ## Patched Turnip
