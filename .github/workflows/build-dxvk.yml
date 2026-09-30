@@ -28,16 +28,14 @@ jobs:
           # Wine build (surface queries and pipeline creation).
           - name: '2.5.3'
             dxvk_ref: v2.5.3
-            patch: dxvk-arm64-toolchain.patch
+            patches: dxvk-arm64-toolchain.patch
           - name: '2.6.2'
             dxvk_ref: v2.6.2
-            patch: dxvk-arm64-toolchain.patch
+            patches: dxvk-arm64-toolchain.patch
           # Newer DXVK with lower CPU overhead per draw call.
           - name: '2.7.1'
             dxvk_ref: v2.7.1
-            # The second patch restores 2.4's check that the Wine instance
-            # has the surface extensions the presenter's queries need.
-            patches: dxvk-2.7-arm64-toolchain.patch dxvk-2.7-surface-extensions.patch
+            patches: dxvk-2.7-arm64-toolchain.patch
     env:
       LLVM_MINGW: llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64
     steps:

@@ -62,13 +62,13 @@ archiver, strip, windres and widl tools, with glslang 16.6.0. Set Meson's host
 machine to Windows/aarch64/little-endian and `cpp_args = ['-include', 'algorithm']`.
 Use native Windows ARM64 DLL outputs, not x64 or ARM64EC substitutions.
 
-`.github/workflows/build-dxvk.yml` rebuilds this baseline and DXVK 2.7.1 on
-GitHub Actions. 2.7.1 needs `patches/dxvk-2.7-arm64-toolchain.patch`, the same
-libc++ fix at its new location, and `patches/dxvk-2.7-surface-extensions.patch`,
-which restores 2.4's check that the Wine instance has the surface extensions
-the presenter needs (without it, the swap chain fails with
-`VK_ERROR_EXTENSION_NOT_PRESENT` on the device). Test a build on the device with `DXVK=test`
-in `tuning.conf`.
+`.github/workflows/build-dxvk.yml` rebuilds this baseline plus DXVK 2.5.3,
+2.6.2 and 2.7.1 on GitHub Actions. 2.5.3 and 2.6.2 take the 2.4.1 patch
+unchanged; 2.7.1 needs `patches/dxvk-2.7-arm64-toolchain.patch`, the same
+libc++ fix at its new location. 2.7.1 does not run on the device yet: surface
+queries fail with `VK_ERROR_EXTENSION_NOT_PRESENT` and winevulkan asserts in
+`vkCreateGraphicsPipelines`. Test a build on the device with `DXVK=test` in
+`tuning.conf`.
 
 ## Patched Turnip
 
