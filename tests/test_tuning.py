@@ -16,13 +16,13 @@ DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC
 
 
 class TuningTests(unittest.TestCase):
-    def parse(self, content):
+    def parse(self, content, path='/usr/bin:/bin'):
         with tempfile.TemporaryDirectory(prefix='thor-tuning-') as directory:
             if content is not None:
                 (Path(directory) / 'tuning.conf').write_bytes(content.encode())
-            script = 'print() { shift; shift; printf "%s\\n" "$*"; }\n' + PARSER + 'echo "ESYNC_ENV=$WINEESYNC"\n'
+            script = 'print() { shift; shift; echo "$*"; }\n' + PARSER + 'echo "ESYNC_ENV=$WINEESYNC"\n'
             result = subprocess.run([SHELL, 'sh', '-c', script], capture_output=True, text=True, check=True,
-                                    env={'KIT': directory, 'PREFIX': '/x', 'PATH': '/usr/bin:/bin'})
+                                    env={'KIT': directory, 'PREFIX': '/x', 'PATH': path})
             return result.stdout.splitlines()
 
     def test_missing_file_uses_defaults(self):
@@ -34,6 +34,13 @@ class TuningTests(unittest.TestCase):
     def test_all_keys_with_spaces_comments_and_crlf(self):
         out = self.parse('FPS_CAP = 90 # note\r\nHUD=off\r\nLOGS=on\nGPL=on\nESYNC=on\nDRIVER=test\nSHADER_CACHE=off')
         self.assertEqual(out, ['TUNING FPS_CAP=90 HUD=off LOGS=on GPL=on ESYNC=on DRIVER=test SHADER_CACHE=off', 'ESYNC_ENV=1'])
+
+    def test_parser_runs_no_external_commands(self):
+        # On device, GameHub prefixes every external command's output with its
+        # own text, which corrupted values; the parser must be shell-only.
+        content = (ROOT / 'tuning.conf').read_text().replace('DRIVER=installed', 'DRIVER=test')
+        out = self.parse(content, path='/nonexistent')
+        self.assertEqual(out[0], DEFAULTS.replace('DRIVER=installed', 'DRIVER=test'))
 
     def test_invalid_values_are_ignored(self):
         out = self.parse('FPS_CAP=abc\nFPS_CAP=12345\nHUD=$(reboot)\nLOGS=maybe\nDRIVER=../evil\nSHADER_CACHE=yes\nUNKNOWN=1\n')

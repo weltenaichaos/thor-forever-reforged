@@ -84,10 +84,13 @@ trap 'exit 130' INT TERM HUP
 # validated values are accepted; the file is never executed.
 tf_fps=60 tf_hud=fps,frametimes,compiler tf_logs=off tf_gpl=off tf_esync=off
 tf_driver=installed tf_cache=on
+tf_ws=$' \t\r'
 if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
     while IFS= read -r tf_line || [ -n "$tf_line" ]; do
         tf_line=${tf_line%%#*}
-        tf_line=$(print -r -- "$tf_line" | tr -d ' \t\r')
+        # Strip whitespace in the shell itself: GameHub's process wrapper
+        # adds its own text to the output of any external command.
+        tf_line=${tf_line//[$tf_ws]/}
         case "$tf_line" in *=*) ;; *) continue ;; esac
         tf_key=${tf_line%%=*} tf_value=${tf_line#*=}
         case "$tf_key" in
