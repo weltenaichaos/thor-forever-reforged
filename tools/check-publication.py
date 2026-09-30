@@ -50,6 +50,7 @@ allowed = {
     'tools/audit-runtime-archive.py', 'tests/test_archive_audit.py',
     'tests/test_discovery.py', 'tools/check-publication.py',
     'tuning.conf', 'tests/test_tuning.py',
+    '.github/workflows/build-turnip.yml',
 }
 problems = []
 for path in root.rglob('*'):

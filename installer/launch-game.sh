@@ -83,6 +83,7 @@ trap 'exit 130' INT TERM HUP
 # Performance settings from $KIT/tuning.conf. Only known keys with
 # validated values are accepted; the file is never executed.
 tf_fps=60 tf_hud=fps,frametimes,compiler tf_logs=off tf_gpl=off tf_esync=off
+tf_driver=installed tf_cache=on
 if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
     while IFS= read -r tf_line || [ -n "$tf_line" ]; do
         tf_line=${tf_line%%#*}
@@ -95,10 +96,12 @@ if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
             LOGS) case "$tf_value" in on|off) tf_logs=$tf_value ;; esac ;;
             GPL) case "$tf_value" in on|off) tf_gpl=$tf_value ;; esac ;;
             ESYNC) case "$tf_value" in on|off) tf_esync=$tf_value ;; esac ;;
+            DRIVER) case "$tf_value" in installed|test) tf_driver=$tf_value ;; esac ;;
+            SHADER_CACHE) case "$tf_value" in on|off) tf_cache=$tf_value ;; esac ;;
         esac
     done <"$KIT/tuning.conf"
 fi
-print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync"
+print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync DRIVER=$tf_driver SHADER_CACHE=$tf_cache"
 tf_esync_value=0
 [ "$tf_esync" = on ] && tf_esync_value=1
 export WINEPREFIX="$PREFIX" WINEARCH=win64 WINEESYNC=$tf_esync_value
@@ -112,7 +115,32 @@ if [ -f "$KIT/enable-trace" ]; then
 fi
 export WINEDATADIR="$RUNTIME/share/wine" XDG_DATA_DIRS="$RUNTIME/share" WINEDLLPATH="$RUNTIME/lib/wine"
 export WINEDLLOVERRIDES='dxgi,d3d11=n,b'
+# DRIVER=test uses Download/Thor-Forever/driver-test/libvulkan_freedreno.so.
+# Shared storage cannot hold executable code, so it is copied into the
+# app-private install first; the installed driver is never touched.
+if [ "$tf_driver" = test ]; then
+    tf_test_src="$KIT/driver-test/libvulkan_freedreno.so"
+    [ -s "$tf_test_src" ] && [ ! -L "$tf_test_src" ] || fail 'DRIVER=test, but driver-test/libvulkan_freedreno.so is missing.'
+    tf_test_dir="$ROOT/driver-test"
+    [ ! -L "$tf_test_dir" ] || fail 'The test driver directory is a link.'
+    mkdir -p "$tf_test_dir" || fail 'Cannot create the test driver directory.'
+    if ! cmp -s "$tf_test_src" "$tf_test_dir/libvulkan_freedreno.so"; then
+        cp "$tf_test_src" "$tf_test_dir/libvulkan_freedreno.so.tmp" &&
+            mv "$tf_test_dir/libvulkan_freedreno.so.tmp" "$tf_test_dir/libvulkan_freedreno.so" ||
+            fail 'Cannot copy the test driver.'
+    fi
+    DRIVER=$tf_test_dir
+fi
+print -r -- "DRIVER_SHA256=$(sha256sum "$DRIVER/libvulkan_freedreno.so" 2>/dev/null | cut -d' ' -f1)"
 export WINEMU_REPLACED_DRIVER="$DRIVER"
+# Mesa's on-disk shader cache is off by default on Android. It only has an
+# effect with a driver built with the shader cache enabled.
+if [ "$tf_cache" = on ]; then
+    mkdir -p "$ROOT/shader-cache" || fail 'Cannot create the shader cache directory.'
+    export MESA_SHADER_CACHE_DISABLE=false MESA_SHADER_CACHE_DIR="$ROOT/shader-cache"
+else
+    export MESA_SHADER_CACHE_DISABLE=true
+fi
 if [ "$tf_logs" = on ]; then
     export WINEDEBUG='-all,err+all' DXVK_LOG_LEVEL=info MESA_LOG_LEVEL=warn
 else

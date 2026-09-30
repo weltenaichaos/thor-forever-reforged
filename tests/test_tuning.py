@@ -12,7 +12,7 @@ SHELL = str(Path(sys.argv.pop(1)).resolve())
 ROOT = Path(__file__).parents[1]
 LAUNCHER = (ROOT / 'installer/launch-game.sh').read_text()
 PARSER = re.search(r'^# Performance settings.*?^export WINEPREFIX=[^\n]*\n', LAUNCHER, re.M | re.S).group(0)
-DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=off'
+DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=off DRIVER=installed SHADER_CACHE=on'
 
 
 class TuningTests(unittest.TestCase):
@@ -32,11 +32,11 @@ class TuningTests(unittest.TestCase):
         self.assertEqual(self.parse((ROOT / 'tuning.conf').read_text()), [DEFAULTS, 'ESYNC_ENV=0'])
 
     def test_all_keys_with_spaces_comments_and_crlf(self):
-        out = self.parse('FPS_CAP = 90 # note\r\nHUD=off\r\nLOGS=on\nGPL=on\nESYNC=on')
-        self.assertEqual(out, ['TUNING FPS_CAP=90 HUD=off LOGS=on GPL=on ESYNC=on', 'ESYNC_ENV=1'])
+        out = self.parse('FPS_CAP = 90 # note\r\nHUD=off\r\nLOGS=on\nGPL=on\nESYNC=on\nDRIVER=test\nSHADER_CACHE=off')
+        self.assertEqual(out, ['TUNING FPS_CAP=90 HUD=off LOGS=on GPL=on ESYNC=on DRIVER=test SHADER_CACHE=off', 'ESYNC_ENV=1'])
 
     def test_invalid_values_are_ignored(self):
-        out = self.parse('FPS_CAP=abc\nFPS_CAP=12345\nHUD=$(reboot)\nLOGS=maybe\nUNKNOWN=1\n')
+        out = self.parse('FPS_CAP=abc\nFPS_CAP=12345\nHUD=$(reboot)\nLOGS=maybe\nDRIVER=../evil\nSHADER_CACHE=yes\nUNKNOWN=1\n')
         self.assertEqual(out, [DEFAULTS, 'ESYNC_ENV=0'])
 
 
