@@ -2,7 +2,9 @@
 
 The MIT license in `LICENSE` applies to Thor Forever's original installer scripts,
 original utility code, tests and documentation. The project's attribution uses
-the owner's public GitHub handle, AeroNico.
+the owner's public GitHub handle, AeroNico. Thor Forever Reforged is a fork;
+changes made in the fork are also MIT, under the additional copyright line in
+`LICENSE`.
 
 It does not relicense Wine, Mesa/Turnip, DXVK, GameHub, Blizzard software,
 third-party code or their assets. Changes to and excerpts from upstream source

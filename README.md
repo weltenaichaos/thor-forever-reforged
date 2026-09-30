@@ -1,3 +1,17 @@
+# Thor Forever Reforged
+
+This is a fork of [AeroNico/thor-forever](https://github.com/AeroNico/thor-forever),
+continued by [weltenaichaos](https://github.com/weltenaichaos). All credit for the
+original investigation, installer and runtime packaging goes to AeroNico; see
+"Credits and provenance" below. Changes made in this fork are listed in its
+pull requests. Test builds from this fork reuse the upstream payload binaries
+unchanged; each published build ships with the upstream source companion and
+the `notices/` folder.
+
+The original README follows.
+
+---
+
 # Thor Forever
 
 **Status: experimental preview — tested on one AYN Thor.**
