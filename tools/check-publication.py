@@ -13,7 +13,7 @@ allowed = {
     'docs/RELEASE-CHECKLIST.md', 'docs/IMPLEMENTATION-STATUS.md',
     'docs/VALIDATION.md', 'docs/RECOVERY.md',
     'docs/SOURCE-PROVENANCE.md',
-    'docs/BUILDING.md',
+    'docs/BUILDING.md', 'docs/TUNING.md',
     'docs/BUNDLED-RUNTIME.md', 'tools/prepare-runtime.py',
     'docs/SOURCE-DISTRIBUTION.md', 'tools/package-sources.py',
     'tools/finalize-kit.py', 'tests/test_source_packaging.py',
