@@ -49,6 +49,7 @@ allowed = {
     'installer/verify-payload.sh', 'installer/install-components.sh',
     'tools/audit-runtime-archive.py', 'tests/test_archive_audit.py',
     'tests/test_discovery.py', 'tools/check-publication.py',
+    'tuning.conf', 'tests/test_tuning.py',
 }
 problems = []
 for path in root.rglob('*'):
