@@ -62,6 +62,11 @@ archiver, strip, windres and widl tools, with glslang 16.6.0. Set Meson's host
 machine to Windows/aarch64/little-endian and `cpp_args = ['-include', 'algorithm']`.
 Use native Windows ARM64 DLL outputs, not x64 or ARM64EC substitutions.
 
+`.github/workflows/build-dxvk.yml` rebuilds this baseline and DXVK 2.7.1 on
+GitHub Actions. 2.7.1 needs `patches/dxvk-2.7-arm64-toolchain.patch`, the same
+libc++ fix at its new location. Test a build on the device with `DXVK=test`
+in `tuning.conf`.
+
 ## Patched Turnip
 
 Start from Mesa `fe067b17d908d8f02e88ef3c4433ec5fbb66b2a9`. Apply both

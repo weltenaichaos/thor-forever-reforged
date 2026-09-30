@@ -12,7 +12,9 @@ SHELL = str(Path(sys.argv.pop(1)).resolve())
 ROOT = Path(__file__).parents[1]
 LAUNCHER = (ROOT / 'installer/launch-game.sh').read_text()
 PARSER = re.search(r'^# Performance settings.*?^export WINEPREFIX=[^\n]*\n', LAUNCHER, re.M | re.S).group(0)
-DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=off DRIVER=installed SHADER_CACHE=on'
+SWAP = re.search(r'^tf_sha256\(\)\n.*?^}\n', LAUNCHER, re.M | re.S).group(0) + re.search(
+    r'^# DXVK=test puts.*?^if \[ "\$tf_dxvk" = installed \].*?^fi\n', LAUNCHER, re.M | re.S).group(0)
+DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=off DRIVER=installed SHADER_CACHE=on DXVK=installed'
 
 
 class TuningTests(unittest.TestCase):
@@ -32,8 +34,8 @@ class TuningTests(unittest.TestCase):
         self.assertEqual(self.parse((ROOT / 'tuning.conf').read_text()), [DEFAULTS, 'ESYNC_ENV=0'])
 
     def test_all_keys_with_spaces_comments_and_crlf(self):
-        out = self.parse('FPS_CAP = 90 # note\r\nHUD=off\r\nLOGS=on\nGPL=on\nESYNC=on\nDRIVER=test\nSHADER_CACHE=off')
-        self.assertEqual(out, ['TUNING FPS_CAP=90 HUD=off LOGS=on GPL=on ESYNC=on DRIVER=test SHADER_CACHE=off', 'ESYNC_ENV=1'])
+        out = self.parse('FPS_CAP = 90 # note\r\nHUD=off\r\nLOGS=on\nGPL=on\nESYNC=on\nDRIVER=test\nSHADER_CACHE=off\nDXVK=test')
+        self.assertEqual(out, ['TUNING FPS_CAP=90 HUD=off LOGS=on GPL=on ESYNC=on DRIVER=test SHADER_CACHE=off DXVK=test', 'ESYNC_ENV=1'])
 
     def test_parser_runs_no_external_commands(self):
         # On device, GameHub prefixes every external command's output with its
@@ -43,8 +45,50 @@ class TuningTests(unittest.TestCase):
         self.assertEqual(out[0], DEFAULTS.replace('DRIVER=installed', 'DRIVER=test'))
 
     def test_invalid_values_are_ignored(self):
-        out = self.parse('FPS_CAP=abc\nFPS_CAP=12345\nHUD=$(reboot)\nLOGS=maybe\nDRIVER=../evil\nSHADER_CACHE=yes\nUNKNOWN=1\n')
+        out = self.parse('FPS_CAP=abc\nFPS_CAP=12345\nHUD=$(reboot)\nLOGS=maybe\nDRIVER=../evil\nSHADER_CACHE=yes\nDXVK=latest\nUNKNOWN=1\n')
         self.assertEqual(out, [DEFAULTS, 'ESYNC_ENV=0'])
+
+
+class DxvkSwapTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='thor-dxvk-')
+        base = Path(self.tmp.name)
+        self.kit, self.root = base / 'kit', base / 'root'
+        self.sys32 = self.root / 'prefix/drive_c/windows/system32'
+        for folder in (self.kit / 'payload', self.kit / 'dxvk-test', self.sys32):
+            folder.mkdir(parents=True)
+        for dll in ('dxgi.dll', 'd3d11.dll'):
+            (self.kit / 'payload' / dll).write_text('installed ' + dll)
+            (self.kit / 'dxvk-test' / dll).write_text('test ' + dll)
+            (self.sys32 / dll).write_text('installed ' + dll)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def swap(self, mode):
+        script = ('print() { shift; shift; echo "$*"; }\nfail() { echo "STOP: $1"; exit 12; }\n'
+                  f'tf_dxvk={mode}\n' + SWAP + 'echo DONE\n')
+        return subprocess.run([SHELL, 'sh', '-c', script], capture_output=True, text=True, env={
+            'KIT': str(self.kit), 'ROOT': str(self.root), 'PREFIX': str(self.root / 'prefix'), 'PATH': '/usr/bin:/bin'})
+
+    def contents(self):
+        return [(self.sys32 / dll).read_text() for dll in ('dxgi.dll', 'd3d11.dll')]
+
+    def test_test_then_installed_round_trip(self):
+        self.assertIn('DONE', self.swap('test').stdout)
+        self.assertEqual(self.contents(), ['test dxgi.dll', 'test d3d11.dll'])
+        self.assertTrue((self.root / 'dxvk-test-active').exists())
+        self.assertIn('DONE', self.swap('installed').stdout)
+        self.assertEqual(self.contents(), ['installed dxgi.dll', 'installed d3d11.dll'])
+        self.assertFalse((self.root / 'dxvk-test-active').exists())
+
+    def test_missing_test_dll_changes_nothing(self):
+        (self.kit / 'dxvk-test/d3d11.dll').unlink()
+        result = self.swap('test')
+        self.assertEqual(result.returncode, 12)
+        self.assertIn('dxvk-test/d3d11.dll is missing', result.stdout)
+        self.assertEqual(self.contents(), ['installed dxgi.dll', 'installed d3d11.dll'])
+        self.assertFalse((self.root / 'dxvk-test-active').exists())
 
 
 if __name__ == '__main__':
