@@ -20,7 +20,7 @@ if (-not (Test-Path -LiteralPath $Launcher -PathType Leaf)) { throw 'Compiled la
 $null=New-Item -ItemType Directory -Path $Destination
 $kit=Join-Path (Resolve-Path $Destination).Path 'Thor-Forever'
 $null=New-Item -ItemType Directory -Path $kit
-foreach ($name in @('installer','docs','notices','LICENSE','LICENSING.md','START-HERE.md','Install-Thor-Forever.cmd')) {
+foreach ($name in @('installer','tuning.conf','docs','notices','LICENSE','LICENSING.md','START-HERE.md','Install-Thor-Forever.cmd')) {
     Copy-Item -LiteralPath (Join-Path $sourceRoot $name) -Destination $kit -Recurse
 }
 $null=New-Item -ItemType Directory -Path (Join-Path $kit 'payload')

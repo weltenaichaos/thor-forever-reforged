@@ -80,7 +80,28 @@ cleanup_lock()
 trap cleanup_lock EXIT
 trap 'exit 130' INT TERM HUP
 
-export WINEPREFIX="$PREFIX" WINEARCH=win64 WINEESYNC=0
+# Performance settings from $KIT/tuning.conf. Only known keys with
+# validated values are accepted; the file is never executed.
+tf_fps=60 tf_hud=fps,frametimes,compiler tf_logs=off tf_gpl=off tf_esync=off
+if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
+    while IFS= read -r tf_line || [ -n "$tf_line" ]; do
+        tf_line=${tf_line%%#*}
+        tf_line=$(print -r -- "$tf_line" | tr -d ' \t\r')
+        case "$tf_line" in *=*) ;; *) continue ;; esac
+        tf_key=${tf_line%%=*} tf_value=${tf_line#*=}
+        case "$tf_key" in
+            FPS_CAP) case "$tf_value" in ''|*[!0-9]*) ;; *) [ "${#tf_value}" -le 3 ] && tf_fps=$tf_value ;; esac ;;
+            HUD) case "$tf_value" in ''|*[!a-z0-9,=.]*) ;; *) tf_hud=$tf_value ;; esac ;;
+            LOGS) case "$tf_value" in on|off) tf_logs=$tf_value ;; esac ;;
+            GPL) case "$tf_value" in on|off) tf_gpl=$tf_value ;; esac ;;
+            ESYNC) case "$tf_value" in on|off) tf_esync=$tf_value ;; esac ;;
+        esac
+    done <"$KIT/tuning.conf"
+fi
+print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync"
+tf_esync_value=0
+[ "$tf_esync" = on ] && tf_esync_value=1
+export WINEPREFIX="$PREFIX" WINEARCH=win64 WINEESYNC=$tf_esync_value
 export WINELOADER="$RUNTIME/bin/wine" WINESERVER="$RUNTIME/bin/wineserver"
 export PATH="$RUNTIME/bin:$PATH"
 export LD_LIBRARY_PATH="$GL_DIR:$RUNTIME/lib:$RUNTIME/lib/wine/aarch64-unix${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -91,11 +112,18 @@ if [ -f "$KIT/enable-trace" ]; then
 fi
 export WINEDATADIR="$RUNTIME/share/wine" XDG_DATA_DIRS="$RUNTIME/share" WINEDLLPATH="$RUNTIME/lib/wine"
 export WINEDLLOVERRIDES='dxgi,d3d11=n,b'
-export WINEDEBUG='-all,err+all' WINEMU_REPLACED_DRIVER="$DRIVER"
-export DXVK_LOG_LEVEL=info
+export WINEMU_REPLACED_DRIVER="$DRIVER"
+if [ "$tf_logs" = on ]; then
+    export WINEDEBUG='-all,err+all' DXVK_LOG_LEVEL=info MESA_LOG_LEVEL=warn
+else
+    export WINEDEBUG='-all' DXVK_LOG_LEVEL=warn MESA_LOG_LEVEL=error
+fi
 export DXVK_LOG_PATH="Z:\\sdcard\\Download\\Thor-Forever\\INSTALLED-WOW-$n"
-export DXVK_CONFIG='dxvk.enableGraphicsPipelineLibrary = False; dxgi.maxFrameRate = 30'
-export MESA_LOG_LEVEL=warn MESA_LOG_FILE="$OUT/mesa.log"
+tf_gpl_value=False
+[ "$tf_gpl" = on ] && tf_gpl_value=True
+export DXVK_CONFIG="dxvk.enableGraphicsPipelineLibrary = $tf_gpl_value; dxgi.maxFrameRate = $tf_fps"
+if [ "$tf_hud" = off ]; then unset DXVK_HUD; else export DXVK_HUD="$tf_hud"; fi
+export MESA_LOG_FILE="$OUT/mesa.log"
 unset WINEBUILDDIR LIBGL_ALWAYS_INDIRECT DXVK_SHADER_DUMP_PATH
 trap 'tf_status=$?; print -r -- "SCRIPT_EXIT=$tf_status STAGE=$tf_stage"; "$WINESERVER" -k; cleanup_lock' EXIT
 tf_stage=restart-test-prefix
