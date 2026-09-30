@@ -24,6 +24,14 @@ jobs:
           - name: '2.4.1'
             dxvk_ref: v2.4.1
             patches: dxvk-arm64-toolchain.patch
+          # Intermediate versions: 2.7.1 failed on the device inside this
+          # Wine build (surface queries and pipeline creation).
+          - name: '2.5.3'
+            dxvk_ref: v2.5.3
+            patch: dxvk-arm64-toolchain.patch
+          - name: '2.6.2'
+            dxvk_ref: v2.6.2
+            patch: dxvk-arm64-toolchain.patch
           # Newer DXVK with lower CPU overhead per draw call.
           - name: '2.7.1'
             dxvk_ref: v2.7.1
