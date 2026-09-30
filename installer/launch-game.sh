@@ -87,7 +87,7 @@ trap 'exit 130' INT TERM HUP
 # Performance settings from $KIT/tuning.conf. Only known keys with
 # validated values are accepted; the file is never executed.
 tf_fps=60 tf_hud=fps,frametimes,compiler tf_logs=off tf_gpl=off tf_esync=off
-tf_driver=installed tf_cache=on tf_dxvk=installed
+tf_driver=installed tf_cache=on tf_dxvk=installed tf_tiler=auto
 tf_ws=$' \t\r'
 if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
     while IFS= read -r tf_line || [ -n "$tf_line" ]; do
@@ -106,10 +106,11 @@ if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
             DRIVER) case "$tf_value" in installed|test) tf_driver=$tf_value ;; esac ;;
             SHADER_CACHE) case "$tf_value" in on|off) tf_cache=$tf_value ;; esac ;;
             DXVK) case "$tf_value" in installed|test) tf_dxvk=$tf_value ;; esac ;;
+            DXVK_TILER) case "$tf_value" in auto|on|off) tf_tiler=$tf_value ;; esac ;;
         esac
     done <"$KIT/tuning.conf"
 fi
-print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync DRIVER=$tf_driver SHADER_CACHE=$tf_cache DXVK=$tf_dxvk"
+print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync DRIVER=$tf_driver SHADER_CACHE=$tf_cache DXVK=$tf_dxvk DXVK_TILER=$tf_tiler"
 tf_esync_value=0
 [ "$tf_esync" = on ] && tf_esync_value=1
 export WINEPREFIX="$PREFIX" WINEARCH=win64 WINEESYNC=$tf_esync_value
@@ -198,6 +199,12 @@ export DXVK_LOG_PATH="Z:\\sdcard\\Download\\Thor-Forever\\INSTALLED-WOW-$n"
 tf_gpl_value=False
 [ "$tf_gpl" = on ] && tf_gpl_value=True
 export DXVK_CONFIG="dxvk.enableGraphicsPipelineLibrary = $tf_gpl_value; dxgi.maxFrameRate = $tf_fps"
+# DXVK 2.6+ switches on a tile-based GPU mode for Turnip by itself; older
+# versions ignore the option.
+case "$tf_tiler" in
+    on) DXVK_CONFIG="$DXVK_CONFIG; dxvk.tilerMode = True" ;;
+    off) DXVK_CONFIG="$DXVK_CONFIG; dxvk.tilerMode = False" ;;
+esac
 if [ "$tf_hud" = off ]; then unset DXVK_HUD; else export DXVK_HUD="$tf_hud"; fi
 export MESA_LOG_FILE="$OUT/mesa.log"
 unset WINEBUILDDIR LIBGL_ALWAYS_INDIRECT DXVK_SHADER_DUMP_PATH
