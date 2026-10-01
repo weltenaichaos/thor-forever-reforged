@@ -44,6 +44,10 @@ if [ -f "$KIT/installer/stage-game.sh" ] && . "$KIT/installer/stage-game.sh"; th
         72) print -r -- 'ADDONS: the staged game has its own Interface folder with files in it; left unchanged. Move its addons to the original Interface\AddOns and delete it.' ;;
         *) print -r -- "ADDONS: Interface folder not linked (code $tf_link); starting without it." ;;
     esac
+    # Addons dropped into Download/Thor-Forever/AddOns are installed now, so no
+    # file browser inside GameHub is needed.
+    tf_sync_addons "$KIT/AddOns" "$SOURCE/Interface/AddOns" ||
+        print -r -- "ADDONS: could not copy from Download/Thor-Forever/AddOns (code $?)."
 fi
 # While DXVK=test DLLs are in the prefix, $ROOT/dxvk-test-active exists and
 # the installed DLLs are restored from payload/ further below.

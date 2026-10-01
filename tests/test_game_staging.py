@@ -119,6 +119,39 @@ class StagingTests(unittest.TestCase):
             self.assertEqual(self.link(source, game), 71)
             self.assertEqual(Path(os.readlink(game / 'Interface')), root / 'elsewhere')
 
+    def sync(self, src, dest):
+        script = 'print() { shift; shift; printf "%s\\n" "$*"; }\n' + SOURCE + '\ntf_sync_addons "$1" "$2"\n'
+        return subprocess.run([SHELL, 'sh', '-c', script, 'test', src.as_posix(), dest.as_posix()],
+                              capture_output=True, text=True)
+
+    def test_sync_addons(self):
+        with tempfile.TemporaryDirectory(prefix='thor-sync-') as directory:
+            root = Path(directory)
+            src, dest = root / 'kit/AddOns', root / 'game/Interface/AddOns'
+            (src / 'New').mkdir(parents=True)
+            (src / 'New/New.toc').write_text('v2')
+            (src / 'NoToc').mkdir()
+            (dest / 'New').mkdir(parents=True)
+            (dest / 'New/old.lua').write_text('stale')
+            (dest / 'Other').mkdir()
+            (dest / 'Other/Other.toc').write_text('keep')
+            result = self.sync(src, dest)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('ADDON COPIED: New', result.stdout)
+            self.assertIn('ADDON SKIPPED: NoToc', result.stdout)
+            self.assertEqual((dest / 'New/New.toc').read_text(), 'v2')
+            self.assertFalse((dest / 'New/old.lua').exists())
+            self.assertFalse((dest / 'NoToc').exists())
+            self.assertEqual((dest / 'Other/Other.toc').read_text(), 'keep')
+            self.assertEqual([p.name for p in dest.iterdir() if p.name.startswith('.')], [])
+
+    def test_sync_without_folder(self):
+        with tempfile.TemporaryDirectory(prefix='thor-sync-') as directory:
+            root = Path(directory)
+            result = self.sync(root / 'missing', root / 'dest')
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((root / 'dest').exists())
+
     def test_parent_data(self): self.run_case('parent-data')
     def test_child_data(self): self.run_case('child-data')
     def test_existing_refused(self): self.run_case('existing')

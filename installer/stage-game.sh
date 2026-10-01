@@ -83,3 +83,27 @@ tf_link_interface() (
     mkdir -p "$tf_target/AddOns" || exit 73
     ln -s "$tf_target" "$tf_game/Interface" || exit 74
 )
+
+# Copy addons the player dropped into shared storage (Download/Thor-Forever/
+# AddOns/<Name>/<Name>.toc) into the game's Interface\AddOns, replacing the
+# installed copy of each one. Folders without a matching .toc, and links, are
+# skipped. Other installed addons are never touched. Prints one line per addon.
+tf_sync_addons() (
+    tf_from=$1
+    tf_to=$2
+    [ -d "$tf_from" ] && [ ! -L "$tf_from" ] || exit 0
+    [ ! -L "$tf_to" ] || exit 80
+    mkdir -p "$tf_to" || exit 81
+    for tf_dir in "$tf_from"/*; do
+        [ -d "$tf_dir" ] && [ ! -L "$tf_dir" ] || continue
+        tf_name=${tf_dir##*/}
+        case "$tf_name" in ''|.*|*[!A-Za-z0-9_.-]*) continue ;; esac
+        [ -f "$tf_dir/$tf_name.toc" ] || { print -r -- "ADDON SKIPPED: $tf_name (no $tf_name.toc)"; continue; }
+        rm -rf "$tf_to/.$tf_name.new" &&
+            cp -R "$tf_dir" "$tf_to/.$tf_name.new" &&
+            rm -rf "$tf_to/$tf_name" &&
+            mv "$tf_to/.$tf_name.new" "$tf_to/$tf_name" ||
+            { print -r -- "ADDON FAILED: $tf_name"; continue; }
+        print -r -- "ADDON COPIED: $tf_name"
+    done
+)
