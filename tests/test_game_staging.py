@@ -1,5 +1,6 @@
 """Temporary fixtures only. Pass a Windows busybox.exe path as the argument."""
 from pathlib import Path
+import os
 import subprocess
 import sys
 import tempfile
@@ -55,7 +56,58 @@ class StagingTests(unittest.TestCase):
                 link = staged / 'Data' if mode == 'child-data' else install / 'game/Data'
                 self.assertTrue(link.is_symlink())
                 self.assertEqual((link / 'fixture').read_text(), 'shared-data')
+                interface = staged / 'Interface'
+                self.assertTrue(interface.is_symlink())
+                self.assertEqual(Path(os.readlink(interface)), game / 'Interface')
+                self.assertTrue((game / 'Interface/AddOns').is_dir())
             self.assertEqual((game / 'WTF/Config.wtf').read_text(), 'original-settings')
+
+    def link(self, source, game):
+        script = SOURCE + '\ntf_link_interface "$1" "$2"\n'
+        return subprocess.run([SHELL, 'sh', '-c', script, 'test', source.as_posix(), game.as_posix()],
+                              capture_output=True, text=True).returncode
+
+    def test_link_existing_install(self):
+        with tempfile.TemporaryDirectory(prefix='thor-link-') as directory:
+            root = Path(directory)
+            source, game = root / 'original/_classic_beta_', root / 'staged/_classic_beta_'
+            source.mkdir(parents=True)
+            game.mkdir(parents=True)
+            self.assertEqual(self.link(source, game), 0)
+            self.assertTrue((game / 'Interface').is_symlink())
+            (source / 'Interface/AddOns/MyAddon').mkdir()
+            self.assertTrue((game / 'Interface/AddOns/MyAddon').is_dir())
+            self.assertEqual(self.link(source, game), 0)  # every launch: already linked
+
+    def test_link_existing_addons_kept(self):
+        with tempfile.TemporaryDirectory(prefix='thor-link-') as directory:
+            root = Path(directory)
+            source, game = root / 'original/_classic_beta_', root / 'staged/_classic_beta_'
+            (source / 'Interface/AddOns/Mine').mkdir(parents=True)
+            game.mkdir(parents=True)
+            self.assertEqual(self.link(source, game), 0)
+            self.assertTrue((game / 'Interface/AddOns/Mine').is_dir())
+
+    def test_link_leaves_real_folder(self):
+        with tempfile.TemporaryDirectory(prefix='thor-link-') as directory:
+            root = Path(directory)
+            source, game = root / 'original/_classic_beta_', root / 'staged/_classic_beta_'
+            source.mkdir(parents=True)
+            (game / 'Interface/AddOns/Keep').mkdir(parents=True)
+            self.assertEqual(self.link(source, game), 72)
+            self.assertFalse((game / 'Interface').is_symlink())
+            self.assertTrue((game / 'Interface/AddOns/Keep').is_dir())
+
+    def test_link_refuses_foreign_link(self):
+        with tempfile.TemporaryDirectory(prefix='thor-link-') as directory:
+            root = Path(directory)
+            source, game = root / 'original/_classic_beta_', root / 'staged/_classic_beta_'
+            source.mkdir(parents=True)
+            game.mkdir(parents=True)
+            (root / 'elsewhere').mkdir()
+            os.symlink(root / 'elsewhere', game / 'Interface')
+            self.assertEqual(self.link(source, game), 71)
+            self.assertEqual(Path(os.readlink(game / 'Interface')), root / 'elsewhere')
 
     def test_parent_data(self): self.run_case('parent-data')
     def test_child_data(self): self.run_case('child-data')
