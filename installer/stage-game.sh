@@ -68,7 +68,9 @@ tf_link_interface() (
     tf_target="$tf_source/Interface"
     [ ! -L "$tf_target" ] || exit 70
     if [ -L "$tf_game/Interface" ]; then
-        [ "$(readlink "$tf_game/Interface")" = "$tf_target" ] && exit 0
+        # Compare by file identity, not readlink output: GameHub's process
+        # wrapper can add its own text to an external command's output.
+        [ "$tf_game/Interface" -ef "$tf_target" ] && exit 0
         exit 71
     fi
     # The client can create an empty Interface\AddOns of its own; rmdir only
