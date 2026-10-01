@@ -34,6 +34,17 @@ cmp -s "$SOURCE/WowB-ARM64.exe" "$GAME/WowB-ARM64.exe" || exit 7
 cmp -s "$RUNTIME/lib/wine/aarch64-windows/ntdll.dll" "$PREFIX/drive_c/windows/system32/ntdll.dll" || exit 8
 [ -s "$GAME/WowB-ARM64.exe" ] || exit 9
 [ -s "$GAME/WTF/Config-Thor-Forever.wtf" ] || exit 10
+# Addons live in the original installation's Interface\AddOns. Not fatal:
+# the game still starts without addons if the link cannot be made.
+if [ -f "$KIT/installer/stage-game.sh" ] && . "$KIT/installer/stage-game.sh"; then
+    tf_link_interface "$SOURCE" "$GAME"
+    tf_link=$?
+    case "$tf_link" in
+        0) print -r -- 'ADDONS: using the original Interface\AddOns folder.' ;;
+        72) print -r -- 'ADDONS: the staged game has its own Interface folder; left unchanged.' ;;
+        *) print -r -- "ADDONS: Interface folder not linked (code $tf_link); starting without it." ;;
+    esac
+fi
 for dll in dxgi.dll d3d11.dll; do
     cmp -s "$KIT/payload/$dll" "$PREFIX/drive_c/windows/system32/$dll" || exit 11
 done
