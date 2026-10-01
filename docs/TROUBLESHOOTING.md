@@ -9,6 +9,7 @@
 | Photosensitivity-stage crash | Verify the exact runtime/driver/shim combination. That visual symptom alone does not prove a shader scheduler fault. |
 | No realms | Verify credentials, region/eligibility and client build against the working PC installation; do not assume a Vulkan fault. |
 | In-game options cause instability | Return to the tested low-load profile. Preserve the failing log privately before experimenting. |
+| Addons not found (`GetNumAddOns()` is 0) | Install addons in the original game's `_classic_beta_\Interface\AddOns` in the GameHub container. The launcher links that folder into the staged game; the launch log's `ADDONS:` line says whether it did. A real `Interface` folder inside the staged game is left alone and used instead. Fully restart the game after adding an addon. |
 | Launcher reports another session | Do not start concurrent clients. Use the launcher's owner-checked lock recovery; never kill all Wine processes globally. |
 
 Do not post raw logs, registry exports or WTF/Account files. They may expose account names, character names, tokens, paths and device identifiers. Share only a reviewed, redacted excerpt relevant to the failure.

@@ -49,8 +49,29 @@ tf_stage_game() (
         cmp -s "$tf_source/../$tf_file" "$tf_stage/$tf_file" || exit 59
     done
     ln -s "$tf_data" "$tf_data_dest" || exit 60
+    tf_link_interface "$tf_source" "$tf_game" || exit 63
     cp "$tf_template" "$tf_game/WTF/Config-Thor-Forever.wtf" || exit 61
     cmp -s "$tf_template" "$tf_game/WTF/Config-Thor-Forever.wtf" || exit 61
     print -r -- 'GAME_STAGED' >"$tf_install/game-ready" || exit 62
     print -r -- 'Separate game settings prepared. Shared Data is not read-only.'
+)
+
+# Make the staged game use the original installation's Interface folder, so
+# addons installed the normal way (Interface\AddOns next to WowB-ARM64.exe in
+# the GameHub container) are the ones the game loads. Creates the original
+# Interface\AddOns if missing. A real Interface folder already in the staged
+# game is never replaced. Called at staging and again at every launch, so
+# installations staged before this existed are linked without reinstalling.
+tf_link_interface() (
+    tf_source=$1
+    tf_game=$2
+    tf_target="$tf_source/Interface"
+    [ ! -L "$tf_target" ] || exit 70
+    if [ -L "$tf_game/Interface" ]; then
+        [ "$(readlink "$tf_game/Interface")" = "$tf_target" ] && exit 0
+        exit 71
+    fi
+    [ ! -e "$tf_game/Interface" ] || exit 72
+    mkdir -p "$tf_target/AddOns" || exit 73
+    ln -s "$tf_target" "$tf_game/Interface" || exit 74
 )
