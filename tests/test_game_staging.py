@@ -98,6 +98,16 @@ class StagingTests(unittest.TestCase):
             self.assertFalse((game / 'Interface').is_symlink())
             self.assertTrue((game / 'Interface/AddOns/Keep').is_dir())
 
+    def test_link_replaces_empty_folder(self):
+        with tempfile.TemporaryDirectory(prefix='thor-link-') as directory:
+            root = Path(directory)
+            source, game = root / 'original/_classic_beta_', root / 'staged/_classic_beta_'
+            (source / 'Interface/AddOns/Mine').mkdir(parents=True)
+            (game / 'Interface/AddOns').mkdir(parents=True)
+            self.assertEqual(self.link(source, game), 0)
+            self.assertTrue((game / 'Interface').is_symlink())
+            self.assertTrue((game / 'Interface/AddOns/Mine').is_dir())
+
     def test_link_refuses_foreign_link(self):
         with tempfile.TemporaryDirectory(prefix='thor-link-') as directory:
             root = Path(directory)

@@ -41,7 +41,7 @@ if [ -f "$KIT/installer/stage-game.sh" ] && . "$KIT/installer/stage-game.sh"; th
     tf_link=$?
     case "$tf_link" in
         0) print -r -- 'ADDONS: using the original Interface\AddOns folder.' ;;
-        72) print -r -- 'ADDONS: the staged game has its own Interface folder; left unchanged.' ;;
+        72) print -r -- 'ADDONS: the staged game has its own Interface folder with files in it; left unchanged. Move its addons to the original Interface\AddOns and delete it.' ;;
         *) print -r -- "ADDONS: Interface folder not linked (code $tf_link); starting without it." ;;
     esac
 fi

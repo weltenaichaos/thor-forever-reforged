@@ -71,6 +71,12 @@ tf_link_interface() (
         [ "$(readlink "$tf_game/Interface")" = "$tf_target" ] && exit 0
         exit 71
     fi
+    # The client can create an empty Interface\AddOns of its own; rmdir only
+    # removes empty folders, so anything with content is still left alone.
+    if [ -d "$tf_game/Interface" ]; then
+        rmdir "$tf_game/Interface/AddOns" 2>/dev/null
+        rmdir "$tf_game/Interface" 2>/dev/null
+    fi
     [ ! -e "$tf_game/Interface" ] || exit 72
     mkdir -p "$tf_target/AddOns" || exit 73
     ln -s "$tf_target" "$tf_game/Interface" || exit 74
