@@ -34,9 +34,13 @@ cmp -s "$SOURCE/WowB-ARM64.exe" "$GAME/WowB-ARM64.exe" || exit 7
 cmp -s "$RUNTIME/lib/wine/aarch64-windows/ntdll.dll" "$PREFIX/drive_c/windows/system32/ntdll.dll" || exit 8
 [ -s "$GAME/WowB-ARM64.exe" ] || exit 9
 [ -s "$GAME/WTF/Config-Thor-Forever.wtf" ] || exit 10
-for dll in dxgi.dll d3d11.dll; do
-    cmp -s "$KIT/payload/$dll" "$PREFIX/drive_c/windows/system32/$dll" || exit 11
-done
+# While DXVK=test DLLs are in the prefix, $ROOT/dxvk-test-active exists and
+# the installed DLLs are restored from payload/ further below.
+if [ ! -e "$ROOT/dxvk-test-active" ]; then
+    for dll in dxgi.dll d3d11.dll; do
+        cmp -s "$KIT/payload/$dll" "$PREFIX/drive_c/windows/system32/$dll" || exit 11
+    done
+fi
 fail() { print -r -- "STOP: $1"; exit 12; }
 # GameHub's process wrapper drops inherited fd9, so external flock cannot use it.
 # Atomic directory lock with shell PID/start-time/boot identity instead.
@@ -83,7 +87,7 @@ trap 'exit 130' INT TERM HUP
 # Performance settings from $KIT/tuning.conf. Only known keys with
 # validated values are accepted; the file is never executed.
 tf_fps=60 tf_hud=fps,frametimes,compiler tf_logs=off tf_gpl=off tf_esync=off
-tf_driver=installed tf_cache=on
+tf_driver=installed tf_cache=on tf_dxvk=installed tf_tiler=auto
 tf_ws=$' \t\r'
 if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
     while IFS= read -r tf_line || [ -n "$tf_line" ]; do
@@ -101,10 +105,12 @@ if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
             ESYNC) case "$tf_value" in on|off) tf_esync=$tf_value ;; esac ;;
             DRIVER) case "$tf_value" in installed|test) tf_driver=$tf_value ;; esac ;;
             SHADER_CACHE) case "$tf_value" in on|off) tf_cache=$tf_value ;; esac ;;
+            DXVK) case "$tf_value" in installed|test) tf_dxvk=$tf_value ;; esac ;;
+            DXVK_TILER) case "$tf_value" in auto|on|off) tf_tiler=$tf_value ;; esac ;;
         esac
     done <"$KIT/tuning.conf"
 fi
-print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync DRIVER=$tf_driver SHADER_CACHE=$tf_cache"
+print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync DRIVER=$tf_driver SHADER_CACHE=$tf_cache DXVK=$tf_dxvk DXVK_TILER=$tf_tiler"
 tf_esync_value=0
 [ "$tf_esync" = on ] && tf_esync_value=1
 export WINEPREFIX="$PREFIX" WINEARCH=win64 WINEESYNC=$tf_esync_value
@@ -137,14 +143,44 @@ fi
 # GameHub's process wrapper can prepend its own messages, without a newline,
 # to a child's output. Take the last 64 characters of each word and keep the
 # first one that is a full lowercase hex digest.
-tf_hash=unknown
-tf_raw=$(/system/bin/toybox sha256sum "$DRIVER/libvulkan_freedreno.so" 2>/dev/null)
-for tf_word in $tf_raw; do
-    [ "${#tf_word}" -ge 64 ] || continue
-    tf_tail=${tf_word#"${tf_word%????????????????????????????????????????????????????????????????}"}
-    case "$tf_tail" in *[!0-9a-f]*) ;; *) tf_hash=$tf_tail; break ;; esac
-done
+tf_sha256()
+{
+    tf_hash=unknown
+    tf_raw=$(/system/bin/toybox sha256sum "$1" 2>/dev/null)
+    for tf_word in $tf_raw; do
+        [ "${#tf_word}" -ge 64 ] || continue
+        tf_tail=${tf_word#"${tf_word%????????????????????????????????????????????????????????????????}"}
+        case "$tf_tail" in *[!0-9a-f]*) ;; *) tf_hash=$tf_tail; break ;; esac
+    done
+}
+tf_sha256 "$DRIVER/libvulkan_freedreno.so"
 print -r -- "DRIVER_SHA256=$tf_hash"
+# DXVK=test puts Download/Thor-Forever/dxvk-test/{dxgi,d3d11}.dll into the
+# test prefix. DXVK=installed puts the installed ones from payload/ back.
+# The marker is written before the first copy, so an interrupted swap is
+# still undone by the next DXVK=installed launch.
+tf_sys32="$PREFIX/drive_c/windows/system32"
+if [ "$tf_dxvk" = test ]; then
+    tf_dxvk_src="$KIT/dxvk-test"
+    for dll in dxgi.dll d3d11.dll; do
+        [ -s "$tf_dxvk_src/$dll" ] && [ ! -L "$tf_dxvk_src/$dll" ] || fail "DXVK=test, but dxvk-test/$dll is missing."
+    done
+    : >"$ROOT/dxvk-test-active" || fail 'Cannot mark the test DXVK as active.'
+else
+    tf_dxvk_src="$KIT/payload"
+fi
+for dll in dxgi.dll d3d11.dll; do
+    [ ! -L "$tf_sys32/$dll" ] || fail "The prefix $dll is a link."
+    if ! cmp -s "$tf_dxvk_src/$dll" "$tf_sys32/$dll"; then
+        cp "$tf_dxvk_src/$dll" "$tf_sys32/$dll.tmp" && mv "$tf_sys32/$dll.tmp" "$tf_sys32/$dll" ||
+            fail "Cannot copy $dll into the prefix."
+    fi
+    tf_sha256 "$tf_sys32/$dll"
+    print -r -- "DXVK_${dll%.dll}_SHA256=$tf_hash"
+done
+if [ "$tf_dxvk" = installed ] && [ -e "$ROOT/dxvk-test-active" ]; then
+    rm "$ROOT/dxvk-test-active" || fail 'Cannot clear the test DXVK marker.'
+fi
 export WINEMU_REPLACED_DRIVER="$DRIVER"
 # Mesa's on-disk shader cache is off by default on Android. It only has an
 # effect with a driver built with the shader cache enabled.
@@ -163,6 +199,12 @@ export DXVK_LOG_PATH="Z:\\sdcard\\Download\\Thor-Forever\\INSTALLED-WOW-$n"
 tf_gpl_value=False
 [ "$tf_gpl" = on ] && tf_gpl_value=True
 export DXVK_CONFIG="dxvk.enableGraphicsPipelineLibrary = $tf_gpl_value; dxgi.maxFrameRate = $tf_fps"
+# DXVK 2.6+ switches on a tile-based GPU mode for Turnip by itself; older
+# versions ignore the option.
+case "$tf_tiler" in
+    on) DXVK_CONFIG="$DXVK_CONFIG; dxvk.tilerMode = True" ;;
+    off) DXVK_CONFIG="$DXVK_CONFIG; dxvk.tilerMode = False" ;;
+esac
 if [ "$tf_hud" = off ]; then unset DXVK_HUD; else export DXVK_HUD="$tf_hud"; fi
 export MESA_LOG_FILE="$OUT/mesa.log"
 unset WINEBUILDDIR LIBGL_ALWAYS_INDIRECT DXVK_SHADER_DUMP_PATH
