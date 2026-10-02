@@ -291,6 +291,14 @@ case "$tf_affinity" in
     prime3) set -- /system/bin/toybox taskset e0 ;;
     *) set -- ;;
 esac
+# WoW writes its own crash reports into Errors inside the private game
+# folder, where they can't be opened on the device. A crash usually ends
+# this script too, so copy the reports at the next launch.
+for tf_err in "$GAME/Errors"/*.txt "$GAME/Errors"/*.log; do
+    [ -f "$tf_err" ] && [ ! -L "$tf_err" ] || continue
+    mkdir -p "$OUT/wow-errors" && cp "$tf_err" "$OUT/wow-errors/" >/dev/null 2>&1 &&
+        print -r -- "WOW_ERROR_REPORT=${tf_err##*/}"
+done
 print -r -- 'Starting WoW in the fresh prefix with separate WTF, Cache and Logs.'
 "$@" "$WINELOADER" "$GAME/WowB-ARM64.exe" -d3d11 -config Config-Thor-Forever.wtf >"$OUT/wine.log" 2>&1
 tf_result=$?
