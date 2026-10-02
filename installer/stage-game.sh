@@ -56,6 +56,32 @@ tf_stage_game() (
     print -r -- 'Separate game settings prepared. Shared Data is not read-only.'
 )
 
+# After a game update (Battle.net patches the original installation), copy the
+# new executable files and build metadata into the staged game, the same set
+# tf_stage_game copied. Data is shared and already up to date; WTF, Cache and
+# Interface are left alone. Each file goes to a temporary name first, so an
+# interrupted copy never leaves a half-written executable behind.
+tf_refresh_game() (
+    tf_source=$1
+    tf_game=$2
+    tf_stage=${tf_game%/*}
+    [ -s "$tf_source/WowB-ARM64.exe" ] && [ ! -L "$tf_source/WowB-ARM64.exe" ] || exit 52
+    [ -d "$tf_game" ] && [ ! -L "$tf_game" ] && [ ! -L "$tf_stage" ] || exit 54
+    tf_copy() {
+        [ ! -L "$1" ] && [ -f "$1" ] && [ ! -L "$2" ] || return 1
+        cp "$1" "$2.new" && cmp -s "$1" "$2.new" && mv -f "$2.new" "$2" || { rm -f "$2.new"; return 1; }
+    }
+    for tf_file in "$tf_source/"*.exe "$tf_source/"*.dll "$tf_source/"*.sig "$tf_source/.flavor.info"; do
+        [ -e "$tf_file" ] || [ -L "$tf_file" ] || continue
+        tf_copy "$tf_file" "$tf_game/${tf_file##*/}" || exit 59
+    done
+    for tf_file in .build.info .flavor.info; do
+        [ -e "$tf_source/../$tf_file" ] || [ -L "$tf_source/../$tf_file" ] || continue
+        tf_copy "$tf_source/../$tf_file" "$tf_stage/$tf_file" || exit 59
+    done
+    cmp -s "$tf_source/WowB-ARM64.exe" "$tf_game/WowB-ARM64.exe" || exit 59
+)
+
 # Make the staged game use the original installation's Interface folder, so
 # addons installed the normal way (Interface\AddOns next to WowB-ARM64.exe in
 # the GameHub container) are the ones the game loads. Creates the original

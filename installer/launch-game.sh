@@ -29,8 +29,13 @@ tf_discover_game "$USR" || { print -r -- 'STOP: a unique standard game installat
 SOURCE=$TF_GAME_DIR
 [ -s "$ROOT/components-ready" ] && [ -s "$ROOT/game-ready" ] || exit 5
 [ -s "$PREFIX/system.reg" ] && [ ! -L "$ROOT" ] && [ ! -L "$PREFIX" ] || exit 6
-# Refuse a copied executable that has become stale after a Battle.net update.
-cmp -s "$SOURCE/WowB-ARM64.exe" "$GAME/WowB-ARM64.exe" || exit 7
+# After a Battle.net update the staged executable is stale: copy the new one
+# (and the other executable files) over from the original installation.
+if ! cmp -s "$SOURCE/WowB-ARM64.exe" "$GAME/WowB-ARM64.exe"; then
+    [ -f "$KIT/installer/stage-game.sh" ] && . "$KIT/installer/stage-game.sh" || exit 7
+    tf_refresh_game "$SOURCE" "$GAME" || { print -r -- "STOP: the game was updated, but copying the new game files failed (code $?)."; exit 7; }
+    print -r -- 'GAME UPDATED: copied the new game files from the original installation.'
+fi
 cmp -s "$RUNTIME/lib/wine/aarch64-windows/ntdll.dll" "$PREFIX/drive_c/windows/system32/ntdll.dll" || exit 8
 [ -s "$GAME/WowB-ARM64.exe" ] || exit 9
 [ -s "$GAME/WTF/Config-Thor-Forever.wtf" ] || exit 10

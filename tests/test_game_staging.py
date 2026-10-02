@@ -152,6 +152,27 @@ class StagingTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertFalse((root / 'dest').exists())
 
+    def test_refresh_after_update(self):
+        with tempfile.TemporaryDirectory(prefix='thor-refresh-') as directory:
+            root = Path(directory)
+            source, game = root / 'original/_classic_beta_', root / 'staged/_classic_beta_'
+            source.mkdir(parents=True)
+            (game / 'WTF').mkdir(parents=True)
+            (source / 'WowB-ARM64.exe').write_bytes(b'new-build')
+            (source / 'helper.dll').write_bytes(b'new-dll')
+            (source.parent / '.build.info').write_text('new-info')
+            (game / 'WowB-ARM64.exe').write_bytes(b'old-build')
+            (game / 'WTF/Config-Thor-Forever.wtf').write_text('keep')
+            script = SOURCE + '\ntf_refresh_game "$1" "$2"\n'
+            result = subprocess.run([SHELL, 'sh', '-c', script, 'test', source.as_posix(), game.as_posix()],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((game / 'WowB-ARM64.exe').read_bytes(), b'new-build')
+            self.assertEqual((game / 'helper.dll').read_bytes(), b'new-dll')
+            self.assertEqual((game.parent / '.build.info').read_text(), 'new-info')
+            self.assertEqual((game / 'WTF/Config-Thor-Forever.wtf').read_text(), 'keep')
+            self.assertEqual([p.name for p in game.iterdir() if p.name.endswith('.new')], [])
+
     def test_parent_data(self): self.run_case('parent-data')
     def test_child_data(self): self.run_case('child-data')
     def test_existing_refused(self): self.run_case('existing')
