@@ -217,6 +217,12 @@ if [ "$tf_logs" = on ]; then
     export WINEDEBUG='-all,err+all' DXVK_LOG_LEVEL=info MESA_LOG_LEVEL=warn
 else
     export WINEDEBUG='-all' DXVK_LOG_LEVEL=warn MESA_LOG_LEVEL=error
+    # Esync errors are rare but explain its crashes, so keep them.
+    [ "$tf_esync" = on ] && WINEDEBUG='-all,err+esync'
+fi
+if [ "$tf_esync" = on ]; then
+    # Esync needs one file descriptor per Windows sync object.
+    print -r -- "FD_LIMIT soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
 fi
 export DXVK_LOG_PATH="Z:\\sdcard\\Download\\Thor-Forever\\INSTALLED-WOW-$n"
 tf_gpl_value=False
