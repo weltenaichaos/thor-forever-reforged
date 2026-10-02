@@ -1,0 +1,123 @@
+# Builds native Windows ARM64 DXVK (dxgi.dll and d3d11.dll) from official
+# DXVK source plus this repo's toolchain patch. Nothing is published; each
+# build is a downloadable workflow artifact for on-device testing.
+name: Build DXVK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-dxvk.yml'
+      - 'patches/dxvk-*.patch'
+
+permissions:
+  contents: read
+
+jobs:
+  dxvk:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The device-tested version, rebuilt here as a baseline.
+          - name: '2.4.1'
+            dxvk_ref: v2.4.1
+            patches: dxvk-arm64-toolchain.patch
+          # Intermediate versions: 2.7.1 failed on the device inside this
+          # Wine build (surface queries and pipeline creation).
+          - name: '2.5.3'
+            dxvk_ref: v2.5.3
+            patches: dxvk-arm64-toolchain.patch
+          - name: '2.6.2'
+            dxvk_ref: v2.6.2
+            patches: dxvk-arm64-toolchain.patch
+          # Newer DXVK with lower CPU overhead per draw call.
+          - name: '2.7.1'
+            dxvk_ref: v2.7.1
+            patches: dxvk-2.7-arm64-toolchain.patch
+    env:
+      LLVM_MINGW: llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools ninja-build
+          pip install --user meson
+
+      - name: Download llvm-mingw
+        run: |
+          curl -fsSL -o llvm-mingw.tar.xz \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/${LLVM_MINGW}.tar.xz"
+          tar -xf llvm-mingw.tar.xz
+          echo "$PWD/${LLVM_MINGW}/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch DXVK
+        run: |
+          git clone -q --depth 1 --branch "${{ matrix.dxvk_ref }}" \
+            --recurse-submodules --shallow-submodules https://github.com/doitsujin/dxvk.git dxvk
+          git -C dxvk log -1 --format='DXVK %H %cd'
+          git -C dxvk submodule status
+
+      - name: Apply patches
+        run: |
+          for patch in ${{ matrix.patches }}; do
+            git -C dxvk apply --verbose "$GITHUB_WORKSPACE/patches/$patch"
+          done
+
+      - name: Configure
+        run: |
+          bin="$PWD/${LLVM_MINGW}/bin"
+          cat > win-arm64.ini <<INI
+          [binaries]
+          c = '$bin/aarch64-w64-mingw32-clang'
+          cpp = '$bin/aarch64-w64-mingw32-clang++'
+          ar = '$bin/aarch64-w64-mingw32-ar'
+          strip = '$bin/aarch64-w64-mingw32-strip'
+          windres = '$bin/aarch64-w64-mingw32-windres'
+          widl = '$bin/aarch64-w64-mingw32-widl'
+
+          [built-in options]
+          cpp_args = ['-include', 'algorithm']
+
+          [properties]
+          needs_exe_wrapper = true
+
+          [host_machine]
+          system = 'windows'
+          cpu_family = 'aarch64'
+          cpu = 'aarch64'
+          endian = 'little'
+          INI
+          cd dxvk
+          meson setup build --cross-file ../win-arm64.ini --buildtype release -Dbuild_id=false
+
+      - name: Build
+        run: ninja -C dxvk/build src/dxgi/dxgi.dll src/d3d11/d3d11.dll
+
+      - name: Package
+        run: |
+          mkdir out
+          for dll in dxgi d3d11; do
+            aarch64-w64-mingw32-strip -o "out/$dll.dll" "dxvk/build/src/$dll/$dll.dll"
+          done
+          {
+            echo "build=dxvk-${{ matrix.name }}"
+            echo "dxvk_ref=${{ matrix.dxvk_ref }}"
+            echo "dxvk_commit=$(git -C dxvk rev-parse HEAD)"
+            echo "repo_commit=$GITHUB_SHA"
+            echo "toolchain=$LLVM_MINGW"
+            echo "glslang=$(glslangValidator --version | head -1)"
+            echo "patches=${{ matrix.patches }}"
+          } > out/BUILD-INFO.txt
+          (cd out && sha256sum dxgi.dll d3d11.dll > SHA256SUMS.txt)
+          cat out/BUILD-INFO.txt out/SHA256SUMS.txt
+          file out/*.dll
+          llvm-readobj --coff-imports out/d3d11.dll | grep 'Name:' | sort -u
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dxvk-${{ matrix.name }}-arm64
+          path: out/
