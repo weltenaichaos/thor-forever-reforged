@@ -15,7 +15,7 @@ def main(path, start=None, end=None):
     for line in open(path, encoding='utf-8', errors='replace'):
         parts = line.rstrip('\n').split(',')
         if parts[0] == 'T' and len(parts) == 2:
-            current = {'t': float(parts[1]), 'f': {}, 'g': None, 'th': {}}
+            current = {'t': float(parts[1]), 'f': {}, 'g': None, 'l': None, 'th': {}}
             samples.append(current)
         elif current is None:
             continue
@@ -24,6 +24,8 @@ def main(path, start=None, end=None):
         elif parts[0] == 'g' and len(parts) == 3:
             current['g'] = (int(parts[1]) if parts[1].isdigit() else None,
                             int(parts[2]) if parts[2].isdigit() else None)
+        elif parts[0] == 'L' and len(parts) == 4:
+            current['l'] = tuple(int(p) if p.isdigit() else None for p in parts[1:])
         elif parts[0] == 't' and len(parts) == 7:
             proc, tid, name, utime, stime, cpu = parts[1:]
             current['th'][(proc, tid)] = (name, int(utime) + int(stime), int(cpu))
@@ -74,6 +76,16 @@ def main(path, start=None, end=None):
         print(f'\nGPU busy: average {sum(busy) / len(busy):.0f}%, max {max(busy)}%{clock}')
     else:
         print('\nGPU busy: not readable on this device')
+
+    # GPU clock limit, thermal step (0 = no thermal limit) and temperature.
+    limits = [s['l'] for s in picked if s['l']]
+    if limits:
+        def span_of(values, scale=1):
+            values = [v for v in values if v is not None]
+            return f'{min(values) // scale}-{max(values) // scale}' if values else '?'
+        print(f'GPU limit: {span_of([l[0] for l in limits], 1000000)} MHz, '
+              f'thermal level {span_of([l[1] for l in limits])}, '
+              f'temperature {span_of([l[2] for l in limits], 1000)} C')
 
 
 if __name__ == '__main__':

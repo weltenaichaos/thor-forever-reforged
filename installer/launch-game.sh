@@ -254,6 +254,11 @@ tf_profile_loop()
         IFS= read -r tf_g </sys/class/kgsl/kgsl-3d0/gpu_busy_percentage 2>/dev/null
         IFS= read -r tf_gf </sys/class/kgsl/kgsl-3d0/devfreq/cur_freq 2>/dev/null
         print -r -- "g,${tf_g%%[!0-9]*},$tf_gf"
+        tf_gm= tf_gt= tf_gc=
+        IFS= read -r tf_gm </sys/class/kgsl/kgsl-3d0/devfreq/max_freq 2>/dev/null
+        IFS= read -r tf_gt </sys/class/kgsl/kgsl-3d0/thermal_pwrlevel 2>/dev/null
+        IFS= read -r tf_gc </sys/class/kgsl/kgsl-3d0/temp 2>/dev/null
+        print -r -- "L,$tf_gm,$tf_gt,${tf_gc%%[!0-9]*}"
         for tf_p in /proc/[0-9]*; do
             IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null || continue
             case "$tf_n" in WowB-ARM64.exe|wineserver) ;; *) continue ;; esac
