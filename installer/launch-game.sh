@@ -480,10 +480,49 @@ tf_state_loop()
         /system/bin/toybox sleep 0.05 >/dev/null 2>&1 </dev/null || break
     done
 }
+# PROFILE=on also asks Android's simpleperf, 2 minutes into the game, which
+# library WoW's threads spend their CPU time in (WoW itself, Wine, DXVK, the
+# GPU driver), for 30 seconds, into cpu.txt. The kernel samples only where
+# each thread is (no call stacks), so nothing reads the game's memory.
+# Android may not allow this for apps; cpu.txt then says why.
+tf_cpu_sample()
+{
+    tf_sp=/system/bin/simpleperf
+    tf_par=?
+    IFS= read -r tf_par </proc/sys/kernel/perf_event_paranoid 2>/dev/null
+    print -r -- "perf_event_paranoid=$tf_par"
+    [ -x "$tf_sp" ] || { print -r -- "no $tf_sp on this device"; return; }
+    tf_pid= tf_i=0
+    while [ -z "$tf_pid" ] && [ "$tf_i" -lt 300 ] && [ -e "$OUT/.profiling" ]; do
+        for tf_p in /proc/[0-9]*; do
+            IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null || continue
+            [ "$tf_n" = WowB-ARM64.exe ] && { tf_pid=${tf_p##*/}; break; }
+        done
+        tf_i=$((tf_i + 1))
+        /system/bin/toybox sleep 1 >/dev/null 2>&1 </dev/null
+    done
+    [ -n "$tf_pid" ] || { print -r -- "WoW did not start"; return; }
+    /system/bin/toybox sleep 120 >/dev/null 2>&1 </dev/null
+    [ -e "/proc/$tf_pid" ] || { print -r -- "WoW exited before sampling"; return; }
+    print -r -- "== record (WoW pid $tf_pid, 30 s)"
+    "$tf_sp" record -p "$tf_pid" -e cpu-clock -f 1000 --duration 30 \
+        -o "$OUT/cpu.data" </dev/null 2>&1
+    [ -s "$OUT/cpu.data" ] || return
+    print -r -- "== main thread by library"
+    "$tf_sp" report -i "$OUT/cpu.data" --tids "$tf_pid" --sort dso </dev/null 2>&1
+    print -r -- "== main thread by function (top 60)"
+    "$tf_sp" report -i "$OUT/cpu.data" --tids "$tf_pid" --sort dso,symbol </dev/null 2>&1 |
+        /system/bin/toybox head -n 80
+    print -r -- "== all threads by thread name and library"
+    "$tf_sp" report -i "$OUT/cpu.data" --sort comm,dso </dev/null 2>&1 |
+        /system/bin/toybox head -n 60
+    rm -f "$OUT/cpu.data"
+}
 if [ "$tf_profile" = on ]; then
     : >"$OUT/.profiling" && {
         tf_profile_loop >"$OUT/perf.csv" 2>/dev/null &
         tf_state_loop >"$OUT/state.csv" 2>/dev/null &
+        tf_cpu_sample >"$OUT/cpu.txt" 2>&1 &
     }
 fi
 # AFFINITY keeps WoW, Wine and DXVK threads off the small cores. On the
