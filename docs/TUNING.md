@@ -3,7 +3,8 @@
 Device tests on the AYN Thor (Adreno 740) in GameHub Lite, 1280x720, low
 settings, FPS_CAP=60. FPS is what the DXVK overlay
 showed in the starter area, in crowds and in the main hub, so treat it as a
-rough range, not a benchmark.
+rough range, not a benchmark. Where the frame time goes, and how to
+measure it, is in [PERFORMANCE.md](PERFORMANCE.md).
 
 ## Recommended profile
 
@@ -43,7 +44,8 @@ Put the files in place first:
   (tested build: sha256 `775295d2...`).
 - `Download/Thor-Forever/dxvk-test/dxgi.dll` and `d3d11.dll` from the
   `dxvk-2.6.2-thor-arm64` artifact of the "Build DXVK" workflow (tested
-  build: d3d11.dll sha256 `9cc173ce...`). It is DXVK 2.6.2 compiled for the
+  builds: d3d11.dll sha256 `9cc173ce...`, and `a5036f0f...` with the
+  frame log for `PROFILE=on`). It is DXVK 2.6.2 compiled for the
   Thor's CPU (ARMv8.2 atomics, Cortex-X3 tuning, thin LTO). In a busy city
   WoW's main thread dropped from 82% to 77% of the fast core while the GPU
   got busier, about 5% less CPU time per frame. The plain `dxvk-2.6.2-arm64`
@@ -66,7 +68,10 @@ The same error, followed by WoW crash reports such as
 `BC_ASSERT(result == WAIT_OBJECT_0)` or `SmallMemAllocator ... head !=
 tailNext`, also appeared with the installed driver even with this setting,
 usually within a few minutes. With the Mesa 26.2.3 driver it did not, so
-the launcher only uses esync with `DRIVER=test`. WoW's crash reports are
+the launcher only uses esync with `DRIVER=test`. Later the same crash,
+after about 6 minutes with missing minimap and menu textures, turned out to
+be an fd leak in Wine's esync. It is fixed in the `wine-ntdll-esync-fix`
+build (see [PERFORMANCE.md](PERFORMANCE.md)). WoW's crash reports are
 copied to `Download/Thor-Forever/wow-errors` at the next launch.
 
 - Android 14 or newer: Developer options, "Disable child process restrictions".
