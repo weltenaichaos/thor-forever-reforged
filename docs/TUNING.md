@@ -15,7 +15,7 @@ GPL=off
 ESYNC=on
 DRIVER=test        # Turnip from Mesa 26.2.3 in driver-test/
 SHADER_CACHE=on
-DXVK=test          # DXVK 2.6.2 in dxvk-test/
+DXVK=test          # DXVK 2.6.2, Thor-tuned build, in dxvk-test/
 DXVK_TILER=off
 AFFINITY=one-then-all  # one core for the first ~30 s, then all cores
 WINE=test          # ntdll with the esync fix in wine-test/
@@ -42,7 +42,12 @@ Put the files in place first:
   `turnip-mesa-26.2.3-cache` artifact of the "Build Turnip" workflow
   (tested build: sha256 `775295d2...`).
 - `Download/Thor-Forever/dxvk-test/dxgi.dll` and `d3d11.dll` from the
-  `dxvk-2.6.2-arm64` artifact of the "Build DXVK" workflow.
+  `dxvk-2.6.2-thor-arm64` artifact of the "Build DXVK" workflow (tested
+  build: d3d11.dll sha256 `9cc173ce...`). It is DXVK 2.6.2 compiled for the
+  Thor's CPU (ARMv8.2 atomics, Cortex-X3 tuning, thin LTO). In a busy city
+  WoW's main thread dropped from 82% to 77% of the fast core while the GPU
+  got busier, about 5% less CPU time per frame. The plain `dxvk-2.6.2-arm64`
+  works too.
 
 If they are missing, the launcher falls back to the installed driver and
 DXVK and keeps esync off. `ESYNC=on` also needs the Android setting below.
