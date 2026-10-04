@@ -56,6 +56,9 @@ class TuningTests(unittest.TestCase):
         out = self.parse('FPS_CAP = 90 # note\r\nHUD=off\r\nLOGS=on\nGPL=on\nESYNC=on\nDRIVER=test\nSHADER_CACHE=off\nDXVK=test\nDXVK_TILER=off\nPROFILE=on\nAFFINITY=big\nTURNIP_MODE=gmem\nWINE=test', test_files=True)
         self.assertEqual(out, ['TUNING FPS_CAP=90 HUD=off LOGS=on GPL=on ESYNC=on DRIVER=test SHADER_CACHE=off DXVK=test DXVK_TILER=off PROFILE=on AFFINITY=big TURNIP_MODE=gmem WINE=test', 'ESYNC_ENV=1'])
 
+    def test_logs_trace(self):
+        self.assertEqual(self.parse('LOGS=trace\n')[0], DEFAULTS.replace('LOGS=off', 'LOGS=trace'))
+
     def test_parser_runs_no_external_commands(self):
         # On device, GameHub prefixes every external command's output with its
         # own text, which corrupted values; the parser must be shell-only.

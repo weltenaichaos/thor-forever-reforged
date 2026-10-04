@@ -18,6 +18,11 @@ permissions:
 jobs:
   wine:
     runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        # plain = no patches from this repo, to tell build differences
+        # apart from the effect of the patches.
+        variant: [esync-fix, plain]
     env:
       WINE_REPO: AeroNico/proton-wine
       # Same commit as the bundled runtime (docs/SOURCE-PROVENANCE.md).
@@ -73,7 +78,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-wine-${{ env.WINE_REF }}-${{ github.sha }}
+          key: ccache-wine-${{ env.WINE_REF }}-${{ matrix.variant }}-${{ github.sha }}
           restore-keys: ccache-wine-${{ env.WINE_REF }}-
 
       - name: Autogen and wine-tools
@@ -89,6 +94,7 @@ jobs:
           bash build-scripts/build-step-arm64ec.sh --enable-16kb-pages --configure
 
       - name: Apply this repo's Wine patches
+        if: matrix.variant == 'esync-fix'
         working-directory: wine
         run: |
           for patch in "$GITHUB_WORKSPACE"/patches/wine-*.patch; do
@@ -119,7 +125,9 @@ jobs:
             echo "wine_ref=$WINE_REF"
             echo "repo_commit=$GITHUB_SHA"
             echo "built_from=$so $dll"
-            echo "patches=$(cd "$GITHUB_WORKSPACE/patches" && ls wine-*.patch | tr '\n' ' ')"
+            echo "variant=${{ matrix.variant }}"
+            [ "${{ matrix.variant }}" = plain ] ||
+              echo "patches=$(cd "$GITHUB_WORKSPACE/patches" && ls wine-*.patch | tr '\n' ' ')"
           } > "$GITHUB_WORKSPACE/out/BUILD-INFO.txt"
           cd "$GITHUB_WORKSPACE/out" && sha256sum ntdll.so ntdll.dll > SHA256SUMS.txt
           cat BUILD-INFO.txt SHA256SUMS.txt
@@ -127,5 +135,5 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: wine-ntdll-esync-fix
+          name: wine-ntdll-${{ matrix.variant }}
           path: out/
