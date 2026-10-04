@@ -146,7 +146,7 @@ if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
             DXVK) case "$tf_value" in installed|test) tf_dxvk=$tf_value ;; esac ;;
             DXVK_TILER) case "$tf_value" in auto|on|off) tf_tiler=$tf_value ;; esac ;;
             PROFILE) case "$tf_value" in on|off) tf_profile=$tf_value ;; esac ;;
-            AFFINITY) case "$tf_value" in all|big|prime3) tf_affinity=$tf_value ;; esac ;;
+            AFFINITY) case "$tf_value" in all|big|prime3|one) tf_affinity=$tf_value ;; esac ;;
             TURNIP_MODE) case "$tf_value" in auto|gmem|sysmem) tf_tumode=$tf_value ;; esac ;;
             WINE) case "$tf_value" in installed|test) tf_wine=$tf_value ;; esac ;;
         esac
@@ -405,6 +405,9 @@ fi
 case "$tf_affinity" in
     big) set -- /system/bin/toybox taskset f8 ;;
     prime3) set -- /system/bin/toybox taskset e0 ;;
+    # one = the prime core only. Slow; only for testing whether a crash
+    # needs threads running at the same time.
+    one) set -- /system/bin/toybox taskset 80 ;;
     *) set -- ;;
 esac
 # WoW writes its own crash reports into Errors inside the private game
