@@ -138,7 +138,7 @@ if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
         case "$tf_key" in
             FPS_CAP) case "$tf_value" in ''|*[!0-9]*) ;; *) [ "${#tf_value}" -le 3 ] && tf_fps=$tf_value ;; esac ;;
             HUD) case "$tf_value" in ''|*[!a-z0-9,=.]*) ;; *) tf_hud=$tf_value ;; esac ;;
-            LOGS) case "$tf_value" in on|off) tf_logs=$tf_value ;; esac ;;
+            LOGS) case "$tf_value" in on|off|trace) tf_logs=$tf_value ;; esac ;;
             GPL) case "$tf_value" in on|off) tf_gpl=$tf_value ;; esac ;;
             ESYNC) case "$tf_value" in on|off) tf_esync=$tf_value ;; esac ;;
             DRIVER) case "$tf_value" in installed|test) tf_driver=$tf_value ;; esac ;;
@@ -311,8 +311,11 @@ if [ "$tf_cache" = on ]; then
 else
     export MESA_SHADER_CACHE_DISABLE=true
 fi
-if [ "$tf_logs" = on ]; then
-    export WINEDEBUG='-all,err+all' DXVK_LOG_LEVEL=info MESA_LOG_LEVEL=warn
+if [ "$tf_logs" != off ]; then
+    export WINEDEBUG='-all,err+all' DXVK_LOG_LEVEL=info MESA_LOG_LEVEL=warning
+    # trace also logs every exception and where each DLL was loaded, to tell
+    # which code a crash address belongs to. It makes wine.log much bigger.
+    [ "$tf_logs" = trace ] && WINEDEBUG='-all,err+all,+seh,+loaddll'
 else
     export WINEDEBUG='-all' DXVK_LOG_LEVEL=warn MESA_LOG_LEVEL=error
     # Esync errors are rare but explain its crashes, so keep them.
