@@ -416,9 +416,10 @@ tf_release_cores()
         /system/bin/toybox sleep "$tf_wait" >/dev/null 2>&1 </dev/null
         for tf_t in /proc/[0-9]*/task/[0-9]*; do
             tf_allowed=
-            while IFS=$' \t' read -r tf_key tf_val; do
+            # Threads can end at any moment, so a failed open is silent.
+            { while IFS=$' \t' read -r tf_key tf_val; do
                 [ "$tf_key" = Cpus_allowed_list: ] && { tf_allowed=$tf_val; break; }
-            done <"$tf_t/status" 2>/dev/null
+            done <"$tf_t/status"; } 2>/dev/null
             [ "$tf_allowed" = 7 ] || continue
             /system/bin/toybox taskset -p ff "${tf_t##*/}" >/dev/null 2>&1 </dev/null
         done
