@@ -39,6 +39,14 @@ def main(path, start=None, end=None):
           f'99th percentile {sorted(times)[int(len(times) * 0.99)]:.1f} ms, '
           f'worst {max(times):.1f} ms')
 
+    # Newer frame logs: time WoW's thread spent inside D3D11 calls (DXVK).
+    if 'api_ms' in picked[0]:
+        api = [r['api_ms'] for r in picked]
+        calls = [r['api_calls'] for r in picked]
+        print(f'Time inside DXVK (D3D11 calls) per frame: median {statistics.median(api):.1f} ms '
+              f'({100 * sum(api) / max(sum(times), 1):.0f}% of frame time), '
+              f'{statistics.median(calls):.0f} calls')
+
     stutters = []
     for i, r in enumerate(picked):
         around = times[max(0, i - WINDOW):i] or times[:WINDOW]
