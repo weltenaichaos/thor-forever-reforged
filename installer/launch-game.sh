@@ -146,7 +146,7 @@ if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
             DXVK) case "$tf_value" in installed|test) tf_dxvk=$tf_value ;; esac ;;
             DXVK_TILER) case "$tf_value" in auto|on|off) tf_tiler=$tf_value ;; esac ;;
             PROFILE) case "$tf_value" in on|off) tf_profile=$tf_value ;; esac ;;
-            AFFINITY) case "$tf_value" in all|big|prime3|one) tf_affinity=$tf_value ;; esac ;;
+            AFFINITY) case "$tf_value" in all|big|prime3|one|one-then-all) tf_affinity=$tf_value ;; esac ;;
             TURNIP_MODE) case "$tf_value" in auto|gmem|sysmem) tf_tumode=$tf_value ;; esac ;;
             WINE) case "$tf_value" in installed|test) tf_wine=$tf_value ;; esac ;;
         esac
@@ -407,7 +407,7 @@ case "$tf_affinity" in
     prime3) set -- /system/bin/toybox taskset e0 ;;
     # one = the prime core only. Slow; only for testing whether a crash
     # needs threads running at the same time.
-    one) set -- /system/bin/toybox taskset 80 ;;
+    one|one-then-all) set -- /system/bin/toybox taskset 80 ;;
     *) set -- ;;
 esac
 # WoW writes its own crash reports into Errors inside the private game
@@ -420,6 +420,26 @@ for tf_err in "$GAME/Errors"/*.txt "$GAME/Errors"/*.log; do
     mkdir -p "$KIT/wow-errors" && cp "$tf_err" "$KIT/wow-errors/" >/dev/null 2>&1 &&
         print -r -- "WOW_ERROR_REPORT=${tf_err##*/}"
 done
+# one-then-all starts WoW on the prime core only and frees all cores once
+# startup is over. With esync, WoW's startup CPU checks sometimes collide
+# across threads and the main thread crashes (a blank window); on one core
+# that did not happen in testing. Only threads still limited to cpu7 are
+# changed, a few times so that late new threads are caught as well.
+tf_release_cores()
+{
+    for tf_wait in 30 15 15 30; do
+        /system/bin/toybox sleep "$tf_wait" >/dev/null 2>&1 </dev/null
+        for tf_t in /proc/[0-9]*/task/[0-9]*; do
+            tf_allowed=
+            while IFS=$' \t' read -r tf_key tf_val; do
+                [ "$tf_key" = Cpus_allowed_list: ] && { tf_allowed=$tf_val; break; }
+            done <"$tf_t/status" 2>/dev/null
+            [ "$tf_allowed" = 7 ] || continue
+            /system/bin/toybox taskset -p ff "${tf_t##*/}" >/dev/null 2>&1 </dev/null
+        done
+    done
+}
+[ "$tf_affinity" = one-then-all ] && { tf_release_cores & }
 print -r -- 'Starting WoW in the fresh prefix with separate WTF, Cache and Logs.'
 "$@" "$WINELOADER" "$GAME/WowB-ARM64.exe" -d3d11 -config Config-Thor-Forever.wtf >"$OUT/wine.log" 2>&1
 tf_result=$?
