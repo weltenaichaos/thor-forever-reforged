@@ -36,6 +36,17 @@ jobs:
           - name: '2.7.1'
             dxvk_ref: v2.7.1
             patches: dxvk-2.7-arm64-toolchain.patch
+          # The shipped test version, built for the Thor's CPU. ARMv8.2 adds
+          # single-instruction atomics (LSE), which DXVK uses on every draw
+          # call; the plain build has to emulate them with retry loops.
+          # Tuning targets the Cortex-X3 that runs WoW's main thread. No SVE,
+          # because Wine does not save SVE registers on thread switches.
+          # Thin LTO lets the compiler optimize across source files.
+          - name: '2.6.2-thor'
+            dxvk_ref: v2.6.2
+            patches: dxvk-arm64-toolchain.patch
+            cpu_args: "'-march=armv8.2-a+fp16+dotprod+rcpc', '-mtune=cortex-x3'"
+            meson_args: -Db_lto=true -Db_lto_mode=thin
     env:
       LLVM_MINGW: llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64
     steps:
@@ -80,7 +91,8 @@ jobs:
           widl = '$bin/aarch64-w64-mingw32-widl'
 
           [built-in options]
-          cpp_args = ['-include', 'algorithm']
+          c_args = [${{ matrix.cpu_args }}]
+          cpp_args = ['-include', 'algorithm', ${{ matrix.cpu_args }}]
 
           [properties]
           needs_exe_wrapper = true
@@ -92,7 +104,7 @@ jobs:
           endian = 'little'
           INI
           cd dxvk
-          meson setup build --cross-file ../win-arm64.ini --buildtype release -Dbuild_id=false
+          meson setup build --cross-file ../win-arm64.ini --buildtype release -Dbuild_id=false ${{ matrix.meson_args }}
 
       - name: Build
         run: ninja -C dxvk/build src/dxgi/dxgi.dll src/d3d11/d3d11.dll
@@ -111,6 +123,8 @@ jobs:
             echo "toolchain=$LLVM_MINGW"
             echo "glslang=$(glslangValidator --version | head -1)"
             echo "patches=${{ matrix.patches }}"
+            echo "cpu_args=${{ matrix.cpu_args }}"
+            echo "meson_args=${{ matrix.meson_args }}"
           } > out/BUILD-INFO.txt
           (cd out && sha256sum dxgi.dll d3d11.dll > SHA256SUMS.txt)
           cat out/BUILD-INFO.txt out/SHA256SUMS.txt
