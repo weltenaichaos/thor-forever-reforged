@@ -414,8 +414,36 @@ tf_profile_loop()
         /system/bin/toybox sleep 2 >/dev/null 2>&1 </dev/null || break
     done
 }
+# PROFILE=on also samples WoW's main thread every 50 ms into state.csv:
+# whether it runs (R), sleeps (S, waiting for something) or waits on the
+# disk (D), and the kernel function it waits in, to see what stutters are.
+tf_state_loop()
+{
+    tf_pid=
+    while [ -e "$OUT/.profiling" ]; do
+        if [ -z "$tf_pid" ] || [ ! -e "/proc/$tf_pid/stat" ]; then
+            tf_pid=
+            for tf_p in /proc/[0-9]*; do
+                IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null || continue
+                [ "$tf_n" = WowB-ARM64.exe ] && { tf_pid=${tf_p##*/}; break; }
+            done
+        fi
+        if [ -n "$tf_pid" ]; then
+            read -r tf_up _ </proc/uptime || tf_up=0
+            tf_st= tf_w=
+            IFS= read -r tf_st <"/proc/$tf_pid/stat" 2>/dev/null
+            IFS= read -r tf_w <"/proc/$tf_pid/wchan" 2>/dev/null
+            tf_st=${tf_st##*) }
+            print -r -- "$tf_up,${tf_st%% *},${tf_w//[!A-Za-z0-9_.]/_}"
+        fi
+        /system/bin/toybox sleep 0.05 >/dev/null 2>&1 </dev/null || break
+    done
+}
 if [ "$tf_profile" = on ]; then
-    : >"$OUT/.profiling" && { tf_profile_loop >"$OUT/perf.csv" 2>/dev/null & }
+    : >"$OUT/.profiling" && {
+        tf_profile_loop >"$OUT/perf.csv" 2>/dev/null &
+        tf_state_loop >"$OUT/state.csv" 2>/dev/null &
+    }
 fi
 # AFFINITY keeps WoW, Wine and DXVK threads off the small cores. On the
 # Snapdragon 8 Gen 2, cpu0-2 are the small cores and cpu7 is the prime core.
