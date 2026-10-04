@@ -108,7 +108,7 @@ trap 'exit 130' INT TERM HUP
 # validated values are accepted; the file is never executed.
 tf_fps=60 tf_hud=fps,frametimes,compiler tf_logs=off tf_gpl=off tf_esync=off
 tf_driver=installed tf_cache=on tf_dxvk=installed tf_tiler=auto
-tf_profile=off tf_affinity=all
+tf_profile=off tf_affinity=all tf_tumode=auto
 tf_ws=$' \t\r'
 if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
     while IFS= read -r tf_line || [ -n "$tf_line" ]; do
@@ -130,10 +130,11 @@ if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
             DXVK_TILER) case "$tf_value" in auto|on|off) tf_tiler=$tf_value ;; esac ;;
             PROFILE) case "$tf_value" in on|off) tf_profile=$tf_value ;; esac ;;
             AFFINITY) case "$tf_value" in all|big|prime3) tf_affinity=$tf_value ;; esac ;;
+            TURNIP_MODE) case "$tf_value" in auto|gmem|sysmem) tf_tumode=$tf_value ;; esac ;;
         esac
     done <"$KIT/tuning.conf"
 fi
-print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync DRIVER=$tf_driver SHADER_CACHE=$tf_cache DXVK=$tf_dxvk DXVK_TILER=$tf_tiler PROFILE=$tf_profile AFFINITY=$tf_affinity"
+print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync DRIVER=$tf_driver SHADER_CACHE=$tf_cache DXVK=$tf_dxvk DXVK_TILER=$tf_tiler PROFILE=$tf_profile AFFINITY=$tf_affinity TURNIP_MODE=$tf_tumode"
 # The shipped tuning.conf picks the test driver and DXVK. Without their
 # files, fall back to the installed ones instead of refusing to start.
 if [ "$tf_driver" = test ] && { [ ! -s "$KIT/driver-test/libvulkan_freedreno.so" ] || [ -L "$KIT/driver-test/libvulkan_freedreno.so" ]; }; then
@@ -226,6 +227,12 @@ if [ "$tf_dxvk" = installed ] && [ -e "$ROOT/dxvk-test-active" ]; then
     rm "$ROOT/dxvk-test-active" || fail 'Cannot clear the test DXVK marker.'
 fi
 export WINEMU_REPLACED_DRIVER="$DRIVER"
+# Turnip renders either in the GPU's fast on-chip tile memory (gmem) or
+# straight to memory (sysmem) and picks per render pass. Forcing one is a
+# driver debug option, used here to compare speed.
+case "$tf_tumode" in
+    gmem|sysmem) export TU_DEBUG="$tf_tumode" ;;
+esac
 # Mesa's on-disk shader cache is off by default on Android. It only has an
 # effect with a driver built with the shader cache enabled.
 if [ "$tf_cache" = on ]; then

@@ -14,8 +14,8 @@ LAUNCHER = (ROOT / 'installer/launch-game.sh').read_text()
 PARSER = re.search(r'^# Performance settings.*?^export WINEPREFIX=[^\n]*\n', LAUNCHER, re.M | re.S).group(0)
 SWAP = re.search(r'^tf_sha256\(\)\n.*?^}\n', LAUNCHER, re.M | re.S).group(0) + re.search(
     r'^# DXVK=test puts.*?^if \[ "\$tf_dxvk" = installed \].*?^fi\n', LAUNCHER, re.M | re.S).group(0)
-DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=off DRIVER=installed SHADER_CACHE=on DXVK=installed DXVK_TILER=auto PROFILE=off AFFINITY=all'
-SHIPPED = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=on DRIVER=test SHADER_CACHE=on DXVK=test DXVK_TILER=off PROFILE=off AFFINITY=all'
+DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=off DRIVER=installed SHADER_CACHE=on DXVK=installed DXVK_TILER=auto PROFILE=off AFFINITY=all TURNIP_MODE=auto'
+SHIPPED = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=on DRIVER=test SHADER_CACHE=on DXVK=test DXVK_TILER=off PROFILE=off AFFINITY=all TURNIP_MODE=auto'
 
 
 class TuningTests(unittest.TestCase):
@@ -51,8 +51,8 @@ class TuningTests(unittest.TestCase):
         self.assertEqual(out[1:], ['ESYNC=on only works with DRIVER=test: esync stays off.', 'ESYNC_ENV=0'])
 
     def test_all_keys_with_spaces_comments_and_crlf(self):
-        out = self.parse('FPS_CAP = 90 # note\r\nHUD=off\r\nLOGS=on\nGPL=on\nESYNC=on\nDRIVER=test\nSHADER_CACHE=off\nDXVK=test\nDXVK_TILER=off\nPROFILE=on\nAFFINITY=big', test_files=True)
-        self.assertEqual(out, ['TUNING FPS_CAP=90 HUD=off LOGS=on GPL=on ESYNC=on DRIVER=test SHADER_CACHE=off DXVK=test DXVK_TILER=off PROFILE=on AFFINITY=big', 'ESYNC_ENV=1'])
+        out = self.parse('FPS_CAP = 90 # note\r\nHUD=off\r\nLOGS=on\nGPL=on\nESYNC=on\nDRIVER=test\nSHADER_CACHE=off\nDXVK=test\nDXVK_TILER=off\nPROFILE=on\nAFFINITY=big\nTURNIP_MODE=gmem', test_files=True)
+        self.assertEqual(out, ['TUNING FPS_CAP=90 HUD=off LOGS=on GPL=on ESYNC=on DRIVER=test SHADER_CACHE=off DXVK=test DXVK_TILER=off PROFILE=on AFFINITY=big TURNIP_MODE=gmem', 'ESYNC_ENV=1'])
 
     def test_parser_runs_no_external_commands(self):
         # On device, GameHub prefixes every external command's output with its
@@ -61,7 +61,7 @@ class TuningTests(unittest.TestCase):
         self.assertEqual(out, [SHIPPED, 'ESYNC_ENV=1'])
 
     def test_invalid_values_are_ignored(self):
-        out = self.parse('FPS_CAP=abc\nFPS_CAP=12345\nHUD=$(reboot)\nLOGS=maybe\nDRIVER=../evil\nSHADER_CACHE=yes\nDXVK=latest\nDXVK_TILER=maybe\nPROFILE=yes\nAFFINITY=f8\nUNKNOWN=1\n')
+        out = self.parse('FPS_CAP=abc\nFPS_CAP=12345\nHUD=$(reboot)\nLOGS=maybe\nDRIVER=../evil\nSHADER_CACHE=yes\nDXVK=latest\nDXVK_TILER=maybe\nPROFILE=yes\nAFFINITY=f8\nTURNIP_MODE=fast\nUNKNOWN=1\n')
         self.assertEqual(out, [DEFAULTS, 'ESYNC_ENV=0'])
 
 
