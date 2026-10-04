@@ -17,7 +17,14 @@ DRIVER=test        # Turnip from Mesa 26.2.3 in driver-test/
 SHADER_CACHE=on
 DXVK=test          # DXVK 2.6.2 in dxvk-test/
 DXVK_TILER=off
+AFFINITY=one-then-all  # one core for the first ~30 s, then all cores
 ```
+
+With esync, WoW's start sometimes stopped on a blank window: during its
+startup CPU checks the main thread resumed at address 0 and Wine's
+exception handling then overflowed its stack (seen with `LOGS=trace`).
+Starting on one core avoided it (3 of 3 starts, against 1 of 3 on all
+cores); the launcher then frees all cores.
 
 Put the files in place first:
 
