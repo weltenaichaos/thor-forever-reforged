@@ -13,7 +13,7 @@ allowed = {
     'docs/RELEASE-CHECKLIST.md', 'docs/IMPLEMENTATION-STATUS.md',
     'docs/VALIDATION.md', 'docs/RECOVERY.md',
     'docs/SOURCE-PROVENANCE.md',
-    'docs/BUILDING.md',
+    'docs/BUILDING.md', 'docs/TUNING.md',
     'docs/BUNDLED-RUNTIME.md', 'tools/prepare-runtime.py',
     'docs/SOURCE-DISTRIBUTION.md', 'tools/package-sources.py',
     'tools/finalize-kit.py', 'tests/test_source_packaging.py',
@@ -50,6 +50,8 @@ allowed = {
     'tools/audit-runtime-archive.py', 'tests/test_archive_audit.py',
     'tests/test_discovery.py', 'tools/check-publication.py',
     'tuning.conf', 'tests/test_tuning.py',
+    '.github/workflows/build-turnip.yml', '.github/workflows/build-dxvk.yml',
+    'patches/dxvk-2.7-arm64-toolchain.patch',
 }
 problems = []
 for path in root.rglob('*'):

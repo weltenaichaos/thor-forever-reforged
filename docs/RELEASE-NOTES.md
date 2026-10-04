@@ -36,8 +36,9 @@ for packaging.
 - Other hardware, GameHub variants and future game builds are unverified.
 - Game Data is shared with the original installation; it is not read-only.
   Never update the separate staged layout through Battle.net.
-- Game updates can make the staged executable stale. The launcher stops if
-  the original executable changes. There is no automatic update migration.
+- Game updates make the staged executable stale. When the original
+  executable changes, the launcher copies the new executable files and build
+  info into the staged game before starting it ("GAME UPDATED" in the log).
 - The installer refuses existing/unfinished destinations. It is not a repair
   command, and there is no automatic uninstaller.
 - If the shell bridge is interrupted after startup, the wrapper may remain

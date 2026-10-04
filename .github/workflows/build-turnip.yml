@@ -1,0 +1,115 @@
+# Builds the Turnip Vulkan driver (libvulkan_freedreno.so) for the AYN Thor
+# from official Mesa source plus this repo's patches. Nothing is published;
+# each build is a downloadable workflow artifact for on-device testing.
+name: Build Turnip
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-turnip.yml'
+      - 'patches/turnip-*.patch'
+
+permissions:
+  contents: read
+
+jobs:
+  turnip:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Same Mesa revision as the device-tested driver, only the shader
+          # cache turned on. Isolates the cache's effect.
+          - name: tested-base-cache
+            mesa_ref: fe067b17d908d8f02e88ef3c4433ec5fbb66b2a9
+          # Current stable Mesa with the same scheduler fix.
+          - name: mesa-26.2.3-cache
+            mesa_ref: mesa-26.2.3
+    env:
+      NDK_VERSION: r27d
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools flex bison ninja-build
+          pip install --user meson mako pyyaml packaging pycparser
+
+      - name: Download Android NDK
+        run: |
+          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+          unzip -q ndk.zip
+          echo "NDK=$PWD/android-ndk-${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Fetch Mesa
+        run: |
+          git init -q mesa
+          git -C mesa fetch -q --depth 1 https://gitlab.freedesktop.org/mesa/mesa.git "${{ matrix.mesa_ref }}"
+          git -C mesa checkout -q FETCH_HEAD
+          git -C mesa log -1 --format='Mesa %H %cd'
+
+      - name: Apply patches
+        run: git -C mesa apply --verbose "$GITHUB_WORKSPACE/patches/turnip-kill-local-baryf.patch"
+
+      - name: Configure
+        run: |
+          bin="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          cat > android-aarch64.ini <<INI
+          [binaries]
+          c = '$bin/aarch64-linux-android28-clang'
+          cpp = '$bin/aarch64-linux-android28-clang++'
+          ar = '$bin/llvm-ar'
+          strip = '$bin/llvm-strip'
+
+          [built-in options]
+          c_link_args = ['-Wl,-z,max-page-size=16384']
+          cpp_link_args = ['-static-libstdc++', '-Wl,-z,max-page-size=16384']
+
+          [properties]
+          needs_exe_wrapper = true
+
+          [host_machine]
+          system = 'android'
+          cpu_family = 'aarch64'
+          cpu = 'armv8'
+          endian = 'little'
+          INI
+          cd mesa
+          meson setup build --cross-file ../android-aarch64.ini \
+            --wrap-mode=nofallback \
+            -Dgallium-drivers= -Dvulkan-drivers=freedreno -Dfreedreno-kmds=kgsl \
+            -Dplatforms=android -Dandroid-stub=true -Dandroid-libbacktrace=disabled \
+            -Dandroid-libperfetto=disabled -Dplatform-sdk-version=28 \
+            -Dglx=disabled -Degl=disabled -Dgbm=disabled -Dllvm=disabled \
+            -Dgles1=disabled -Dgles2=disabled -Dopengl=false -Dbuild-tests=false \
+            -Dvideo-codecs= -Dbuildtype=release -Dzstd=disabled -Dexpat=disabled \
+            -Dzlib=enabled -Dshader-cache=enabled
+
+      - name: Build
+        run: ninja -C mesa/build src/freedreno/vulkan/libvulkan_freedreno.so
+
+      - name: Package
+        run: |
+          mkdir out
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
+            -o out/libvulkan_freedreno.so mesa/build/src/freedreno/vulkan/libvulkan_freedreno.so
+          {
+            echo "build=${{ matrix.name }}"
+            echo "mesa_ref=${{ matrix.mesa_ref }}"
+            echo "mesa_commit=$(git -C mesa rev-parse HEAD)"
+            echo "repo_commit=$GITHUB_SHA"
+            echo "ndk=$NDK_VERSION"
+            echo "patches=turnip-kill-local-baryf.patch"
+            echo "shader_cache=enabled"
+          } > out/BUILD-INFO.txt
+          (cd out && sha256sum libvulkan_freedreno.so > SHA256SUMS.txt)
+          cat out/BUILD-INFO.txt out/SHA256SUMS.txt
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d out/libvulkan_freedreno.so | grep NEEDED
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: turnip-${{ matrix.name }}
+          path: out/
