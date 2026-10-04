@@ -36,7 +36,9 @@ if ! cmp -s "$SOURCE/WowB-ARM64.exe" "$GAME/WowB-ARM64.exe"; then
     tf_refresh_game "$SOURCE" "$GAME" || { print -r -- "STOP: the game was updated, but copying the new game files failed (code $?)."; exit 7; }
     print -r -- 'GAME UPDATED: copied the new game files from the original installation.'
 fi
-cmp -s "$RUNTIME/lib/wine/aarch64-windows/ntdll.dll" "$PREFIX/drive_c/windows/system32/ntdll.dll" || exit 8
+# While a WINE=test swap is active the check runs after the swap instead.
+[ -e "$ROOT/wine-test-active" ] ||
+    cmp -s "$RUNTIME/lib/wine/aarch64-windows/ntdll.dll" "$PREFIX/drive_c/windows/system32/ntdll.dll" || exit 8
 [ -s "$GAME/WowB-ARM64.exe" ] || exit 9
 [ -s "$GAME/WTF/Config-Thor-Forever.wtf" ] || exit 10
 # Addons live in the original installation's Interface\AddOns. Not fatal:
@@ -246,29 +248,54 @@ done
 if [ "$tf_dxvk" = installed ] && [ -e "$ROOT/dxvk-test-active" ]; then
     rm "$ROOT/dxvk-test-active" || fail 'Cannot clear the test DXVK marker.'
 fi
-# WINE=test swaps in Download/Thor-Forever/wine-test/ntdll.so (from the
-# "Build Wine" workflow: the same Wine source plus this repo's esync fix).
-# The installed ntdll.so is kept as ntdll.so.installed and put back by the
-# next WINE=installed launch, also after an interrupted swap.
+# WINE=test swaps in Download/Thor-Forever/wine-test/ntdll.so and, when
+# present, ntdll.dll (from the "Build Wine" workflow: the same Wine source
+# plus this repo's esync fix). The two halves of ntdll must come from the
+# same build. Each installed file is kept as <file>.installed and put back
+# by the next WINE=installed launch, also after an interrupted swap.
 tf_ntdll="$RUNTIME/lib/wine/aarch64-unix/ntdll.so"
-[ ! -L "$tf_ntdll" ] || fail 'The runtime ntdll.so is a link.'
-if [ "$tf_wine" = test ]; then
-    if [ ! -e "$ROOT/wine-test-active" ]; then
-        cp "$tf_ntdll" "$tf_ntdll.installed.tmp" && mv "$tf_ntdll.installed.tmp" "$tf_ntdll.installed" ||
-            fail 'Cannot keep a copy of the installed ntdll.so.'
-        : >"$ROOT/wine-test-active" || fail 'Cannot mark the test Wine as active.'
+tf_ntdll_pe="$RUNTIME/lib/wine/aarch64-windows/ntdll.dll"
+tf_ntdll_sys="$PREFIX/drive_c/windows/system32/ntdll.dll"
+for tf_file in "$tf_ntdll" "$tf_ntdll_pe" "$tf_ntdll_sys"; do
+    [ ! -L "$tf_file" ] || fail "${tf_file##*/} in the runtime or prefix is a link."
+done
+tf_swap_in()
+{
+    if [ ! -e "$2.installed" ]; then
+        cp "$2" "$2.installed.tmp" && mv "$2.installed.tmp" "$2.installed" ||
+            fail "Cannot keep a copy of the installed ${2##*/}."
     fi
-    if ! cmp -s "$KIT/wine-test/ntdll.so" "$tf_ntdll"; then
-        cp "$KIT/wine-test/ntdll.so" "$tf_ntdll.tmp" && mv "$tf_ntdll.tmp" "$tf_ntdll" ||
-            fail 'Cannot copy the test ntdll.so.'
+    if ! cmp -s "$1" "$2"; then
+        cp "$1" "$2.tmp" && mv "$2.tmp" "$2" || fail "Cannot copy the test ${2##*/}."
+    fi
+}
+tf_swap_back()
+{
+    [ -e "$1.installed" ] || return 0
+    cp "$1.installed" "$1.tmp" && mv "$1.tmp" "$1" && rm "$1.installed" ||
+        fail "Cannot restore the installed ${1##*/}."
+}
+if [ "$tf_wine" = test ]; then
+    : >"$ROOT/wine-test-active" || fail 'Cannot mark the test Wine as active.'
+    tf_swap_in "$KIT/wine-test/ntdll.so" "$tf_ntdll"
+    if [ -f "$KIT/wine-test/ntdll.dll" ]; then
+        tf_swap_in "$KIT/wine-test/ntdll.dll" "$tf_ntdll_pe"
+        tf_swap_in "$KIT/wine-test/ntdll.dll" "$tf_ntdll_sys"
+    else
+        tf_swap_back "$tf_ntdll_pe"
+        tf_swap_back "$tf_ntdll_sys"
     fi
 elif [ -e "$ROOT/wine-test-active" ]; then
-    cp "$tf_ntdll.installed" "$tf_ntdll.tmp" && mv "$tf_ntdll.tmp" "$tf_ntdll" ||
-        fail 'Cannot restore the installed ntdll.so.'
+    for tf_file in "$tf_ntdll" "$tf_ntdll_pe" "$tf_ntdll_sys"; do
+        tf_swap_back "$tf_file"
+    done
     rm "$ROOT/wine-test-active" || fail 'Cannot clear the test Wine marker.'
 fi
+cmp -s "$tf_ntdll_pe" "$tf_ntdll_sys" || fail 'The runtime and prefix ntdll.dll differ.'
 tf_sha256 "$tf_ntdll"
 print -r -- "WINE_NTDLL_SHA256=$tf_hash"
+tf_sha256 "$tf_ntdll_pe"
+print -r -- "WINE_NTDLL_DLL_SHA256=$tf_hash"
 export WINEMU_REPLACED_DRIVER="$DRIVER"
 # Turnip renders either in the GPU's fast on-chip tile memory (gmem) or
 # straight to memory (sysmem) and picks per render pass. Forcing one is a
