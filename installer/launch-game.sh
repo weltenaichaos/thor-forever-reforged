@@ -146,7 +146,7 @@ if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
             DXVK) case "$tf_value" in installed|test) tf_dxvk=$tf_value ;; esac ;;
             DXVK_TILER) case "$tf_value" in auto|on|off) tf_tiler=$tf_value ;; esac ;;
             PROFILE) case "$tf_value" in on|off) tf_profile=$tf_value ;; esac ;;
-            AFFINITY) case "$tf_value" in all|big|prime3|one|one-then-all) tf_affinity=$tf_value ;; esac ;;
+            AFFINITY) case "$tf_value" in all|big|prime3|one|one-then-all|one-then-split) tf_affinity=$tf_value ;; esac ;;
             TURNIP_MODE) case "$tf_value" in auto|gmem|sysmem) tf_tumode=$tf_value ;; esac ;;
             WINE) case "$tf_value" in installed|test) tf_wine=$tf_value ;; esac ;;
         esac
@@ -416,7 +416,8 @@ tf_profile_loop()
 }
 # PROFILE=on also samples WoW's main thread every 50 ms into state.csv:
 # whether it runs (R), sleeps (S, waiting for something) or waits on the
-# disk (D), and the kernel function it waits in, to see what stutters are.
+# disk (D), the kernel function it waits in, and from schedstat its total
+# time on a core and waiting for a free core (ns), to see what stutters are.
 tf_state_loop()
 {
     tf_pid=
@@ -430,11 +431,12 @@ tf_state_loop()
         fi
         if [ -n "$tf_pid" ]; then
             read -r tf_up _ </proc/uptime || tf_up=0
-            tf_st= tf_w=
-            IFS= read -r tf_st <"/proc/$tf_pid/stat" 2>/dev/null
-            IFS= read -r tf_w <"/proc/$tf_pid/wchan" 2>/dev/null
+            tf_st= tf_w= tf_run= tf_rq=
+            IFS= read -r tf_st <"/proc/$tf_pid/task/$tf_pid/stat" 2>/dev/null
+            IFS= read -r tf_w <"/proc/$tf_pid/task/$tf_pid/wchan" 2>/dev/null
+            read -r tf_run tf_rq _ <"/proc/$tf_pid/task/$tf_pid/schedstat" 2>/dev/null
             tf_st=${tf_st##*) }
-            print -r -- "$tf_up,${tf_st%% *},${tf_w//[!A-Za-z0-9_.]/_}"
+            print -r -- "$tf_up,${tf_st%% *},${tf_w//[!A-Za-z0-9_.]/_},${tf_run//[!0-9]/},${tf_rq//[!0-9]/}"
         fi
         /system/bin/toybox sleep 0.05 >/dev/null 2>&1 </dev/null || break
     done
@@ -452,7 +454,7 @@ case "$tf_affinity" in
     prime3) set -- /system/bin/toybox taskset e0 ;;
     # one = the prime core only. Slow; only for testing whether a crash
     # needs threads running at the same time.
-    one|one-then-all) set -- /system/bin/toybox taskset 80 ;;
+    one|one-then-all|one-then-split) set -- /system/bin/toybox taskset 80 ;;
     *) set -- ;;
 esac
 # WoW writes its own crash reports into Errors inside the private game
@@ -470,22 +472,49 @@ done
 # across threads and the main thread crashes (a blank window); on one core
 # that did not happen in testing. Only threads still limited to cpu7 are
 # changed, a few times so that late new threads are caught as well.
+# one-then-split does the same, but leaves WoW's main thread alone on cpu7
+# and moves every other thread to cpu0-6, so no other thread can take the
+# prime core from it. Threads the main thread starts later inherit cpu7,
+# so it keeps checking every 10 s while WoW runs.
+tf_release_once()
+{
+    for tf_t in /proc/[0-9]*/task/[0-9]*; do
+        tf_allowed=
+        # Threads can end at any moment, so a failed open is silent.
+        { while IFS=$' \t' read -r tf_key tf_val; do
+            [ "$tf_key" = Cpus_allowed_list: ] && { tf_allowed=$tf_val; break; }
+        done <"$tf_t/status"; } 2>/dev/null
+        [ "$tf_allowed" = 7 ] || continue
+        tf_mask=ff
+        if [ "$tf_affinity" = one-then-split ]; then
+            tf_p=${tf_t%/task/*}
+            tf_n=
+            IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null
+            [ "$tf_n" = WowB-ARM64.exe ] && [ "${tf_p##*/}" = "${tf_t##*/}" ] && continue
+            tf_mask=7f
+        fi
+        /system/bin/toybox taskset -p "$tf_mask" "${tf_t##*/}" >/dev/null 2>&1 </dev/null
+    done
+}
 tf_release_cores()
 {
     for tf_wait in 30 15 15 30; do
         /system/bin/toybox sleep "$tf_wait" >/dev/null 2>&1 </dev/null
-        for tf_t in /proc/[0-9]*/task/[0-9]*; do
-            tf_allowed=
-            # Threads can end at any moment, so a failed open is silent.
-            { while IFS=$' \t' read -r tf_key tf_val; do
-                [ "$tf_key" = Cpus_allowed_list: ] && { tf_allowed=$tf_val; break; }
-            done <"$tf_t/status"; } 2>/dev/null
-            [ "$tf_allowed" = 7 ] || continue
-            /system/bin/toybox taskset -p ff "${tf_t##*/}" >/dev/null 2>&1 </dev/null
+        tf_release_once
+    done
+    [ "$tf_affinity" = one-then-split ] || return 0
+    while :; do
+        /system/bin/toybox sleep 10 >/dev/null 2>&1 </dev/null
+        tf_seen=
+        for tf_p in /proc/[0-9]*; do
+            IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null || continue
+            [ "$tf_n" = WowB-ARM64.exe ] && { tf_seen=1; break; }
         done
+        [ -n "$tf_seen" ] || return 0
+        tf_release_once
     done
 }
-[ "$tf_affinity" = one-then-all ] && { tf_release_cores & }
+case "$tf_affinity" in one-then-all|one-then-split) tf_release_cores & ;; esac
 print -r -- 'Starting WoW in the fresh prefix with separate WTF, Cache and Logs.'
 "$@" "$WINELOADER" "$GAME/WowB-ARM64.exe" -d3d11 -config Config-Thor-Forever.wtf >"$OUT/wine.log" 2>&1
 tf_result=$?
