@@ -134,6 +134,28 @@ if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
     done <"$KIT/tuning.conf"
 fi
 print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync DRIVER=$tf_driver SHADER_CACHE=$tf_cache DXVK=$tf_dxvk DXVK_TILER=$tf_tiler PROFILE=$tf_profile AFFINITY=$tf_affinity"
+# The shipped tuning.conf picks the test driver and DXVK. Without their
+# files, fall back to the installed ones instead of refusing to start.
+if [ "$tf_driver" = test ] && { [ ! -s "$KIT/driver-test/libvulkan_freedreno.so" ] || [ -L "$KIT/driver-test/libvulkan_freedreno.so" ]; }; then
+    print -r -- 'DRIVER=test, but driver-test/libvulkan_freedreno.so is missing: using the installed driver.'
+    tf_driver=installed
+fi
+if [ "$tf_dxvk" = test ]; then
+    for dll in dxgi.dll d3d11.dll; do
+        if [ ! -s "$KIT/dxvk-test/$dll" ] || [ -L "$KIT/dxvk-test/$dll" ]; then
+            print -r -- "DXVK=test, but dxvk-test/$dll is missing: using the installed DXVK."
+            tf_dxvk=installed
+            break
+        fi
+    done
+fi
+# With the installed driver, esync made WoW's own waits fail and the game
+# crashed within minutes (2026-10-02); with the Mesa 26.2.3 test driver it
+# ran without errors. So esync is only used together with DRIVER=test.
+if [ "$tf_esync" = on ] && [ "$tf_driver" != test ]; then
+    print -r -- 'ESYNC=on only works with DRIVER=test: esync stays off.'
+    tf_esync=off
+fi
 tf_esync_value=0
 [ "$tf_esync" = on ] && tf_esync_value=1
 export WINEPREFIX="$PREFIX" WINEARCH=win64 WINEESYNC=$tf_esync_value
@@ -152,7 +174,6 @@ export WINEDLLOVERRIDES='dxgi,d3d11=n,b'
 # app-private install first; the installed driver is never touched.
 if [ "$tf_driver" = test ]; then
     tf_test_src="$KIT/driver-test/libvulkan_freedreno.so"
-    [ -s "$tf_test_src" ] && [ ! -L "$tf_test_src" ] || fail 'DRIVER=test, but driver-test/libvulkan_freedreno.so is missing.'
     tf_test_dir="$ROOT/driver-test"
     [ ! -L "$tf_test_dir" ] || fail 'The test driver directory is a link.'
     mkdir -p "$tf_test_dir" || fail 'Cannot create the test driver directory.'
