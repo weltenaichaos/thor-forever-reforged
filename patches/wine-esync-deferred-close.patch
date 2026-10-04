@@ -62,7 +62,41 @@
  
      return &esync_list[entry][idx];
  }
-@@ -269,6 +288,22 @@
+@@ -207,6 +226,24 @@
+  * semaphore, etc. created using create_esync) or a generic synchronizable
+  * server-side object which the server will signal (e.g. a process, thread,
+  * message queue, etc.) */
++/* Some other code in the process (seen with GPU drivers that close fence
++ * fds twice) can close an fd number it no longer owns. New fds get the
++ * lowest free number, so such a stray close() easily hits a recent esync
++ * fd: its writes then fail with EBADF and the signal is lost, or the number
++ * is reused and the wrong object is signaled. Keep esync fds in a high range
++ * that normal allocations never reach. */
++#define ESYNC_FD_BASE 16384
++
++static int esync_move_fd_high( int fd )
++{
++    int high;
++
++    if (fd < 0 || fd >= ESYNC_FD_BASE) return fd;
++    if ((high = fcntl( fd, F_DUPFD_CLOEXEC, ESYNC_FD_BASE )) < 0) return fd;
++    close( fd );
++    return high;
++}
++
+ static NTSTATUS get_object( HANDLE handle, struct esync **obj )
+ {
+     NTSTATUS ret = STATUS_SUCCESS;
+@@ -242,7 +279,7 @@
+             {
+                 type = reply->type;
+                 shm_idx = reply->sync_shm_idx;
+-                fd = wine_server_receive_fd( &fd_handle );
++                fd = esync_move_fd_high( wine_server_receive_fd( &fd_handle ) );
+                 assert( wine_server_ptr_handle(fd_handle) == handle );
+             }
+         }
+@@ -269,6 +306,22 @@
      return ret;
  }
  
@@ -85,7 +119,7 @@
  NTSTATUS esync_close( HANDLE handle )
  {
      UINT_PTR entry, idx = handle_to_index( handle, &entry );
-@@ -277,10 +312,16 @@
+@@ -277,10 +330,16 @@
  
      if (entry < ESYNC_LIST_ENTRIES && esync_list[entry])
      {
@@ -105,3 +139,21 @@
          }
      }
  
+@@ -511,7 +570,7 @@
+     if (!InterlockedExchange( (LONG *)&event->signaled, 1 ) || obj->type == ESYNC_AUTO_EVENT)
+     {
+         if (write( obj->fd, &value, sizeof(value) ) == -1)
+-            ERR("write: %s\n", strerror(errno));
++            ERR("write: %s (handle %p, fd %d)\n", strerror(errno), handle, obj->fd);
+     }
+ 
+     if (obj->type == ESYNC_MANUAL_EVENT)
+@@ -798,7 +857,7 @@
+         {
+             if (!(ret = wine_server_call( req )))
+             {
+-                fd = wine_server_receive_fd( &fd_handle );
++                fd = esync_move_fd_high( wine_server_receive_fd( &fd_handle ) );
+                 assert( fd_handle == (GetCurrentThreadId() | 1) );
+             }
+         }
