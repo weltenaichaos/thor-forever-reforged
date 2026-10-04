@@ -368,9 +368,9 @@ tf_stage=restart-test-prefix
 tf_stage=game
 cd "$GAME" || exit 18
 # PROFILE=on samples, every 2 seconds, the CPU time and current core of each
-# WoW and wineserver thread, how much WoW has read from storage, every
-# core's clock and the GPU load into perf.csv. It only reads /proc and /sys
-# with shell builtins.
+# WoW and wineserver thread, how much WoW has read from storage, how many
+# files each has open, every core's clock and the GPU load into perf.csv.
+# It only reads /proc and /sys with shell builtins.
 tf_profile_loop()
 {
     while [ -e "$OUT/.profiling" ]; do
@@ -393,6 +393,9 @@ tf_profile_loop()
         for tf_p in /proc/[0-9]*; do
             IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null || continue
             case "$tf_n" in WowB-ARM64.exe|wineserver) ;; *) continue ;; esac
+            # Open files (fds), to see a leak filling the fd table.
+            set -- "$tf_p"/fd/*
+            [ "$1" != "$tf_p/fd/*" ] && print -r -- "n,$tf_n,${tf_p##*/},$#"
             # Bytes WoW has read so far, to see loading bursts.
             if [ "$tf_n" = WowB-ARM64.exe ]; then
                 tf_rc= tf_rb=

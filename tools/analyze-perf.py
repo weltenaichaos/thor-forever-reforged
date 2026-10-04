@@ -15,7 +15,7 @@ def main(path, start=None, end=None):
     for line in open(path, encoding='utf-8', errors='replace'):
         parts = line.rstrip('\n').split(',')
         if parts[0] == 'T' and len(parts) == 2:
-            current = {'t': float(parts[1]), 'f': {}, 'g': None, 'l': None, 'th': {}, 'io': None}
+            current = {'t': float(parts[1]), 'f': {}, 'g': None, 'l': None, 'th': {}, 'io': None, 'fds': {}}
             samples.append(current)
         elif current is None:
             continue
@@ -28,6 +28,8 @@ def main(path, start=None, end=None):
             current['l'] = tuple(int(p) if p.isdigit() else None for p in parts[1:])
         elif parts[0] == 'i' and len(parts) == 4 and parts[2].isdigit():
             current['io'] = int(parts[2])
+        elif parts[0] == 'n' and len(parts) == 4 and parts[3].isdigit():
+            current['fds'][parts[1]] = int(parts[3])
         elif parts[0] == 't' and len(parts) == 7:
             proc, tid, name, utime, stime, cpu = parts[1:]
             current['th'][(proc, tid)] = (name, int(utime) + int(stime), int(cpu))
@@ -99,6 +101,14 @@ def main(path, start=None, end=None):
         busy = [f'{t:.0f}s ({r:.0f})' for t, r in rates if r >= 20]
         if busy:
             print('  bursts of 20+ MB/s at: ' + ', '.join(busy[:30]))
+
+    # Open fds; a steady climb is a leak that ends with failed opens.
+    for name in ('WowB-ARM64.exe', 'wineserver'):
+        counts = [(s['t'] - t0, s['fds'][name]) for s in picked if name in s['fds']]
+        if counts:
+            peak = max(counts, key=lambda c: c[1])
+            print(f'\n{name} open fds: {counts[0][1]} at start, {counts[-1][1]} at end, '
+                  f'peak {peak[1]} at {peak[0]:.0f}s')
 
 
 if __name__ == '__main__':
