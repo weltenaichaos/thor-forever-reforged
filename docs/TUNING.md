@@ -18,6 +18,7 @@ SHADER_CACHE=on
 DXVK=test          # DXVK 2.6.2 in dxvk-test/
 DXVK_TILER=off
 AFFINITY=one-then-all  # one core for the first ~30 s, then all cores
+WINE=test          # ntdll with the esync fix in wine-test/
 ```
 
 With esync, WoW's start sometimes stopped on a blank window: during its
@@ -25,6 +26,15 @@ startup CPU checks the main thread resumed at address 0 and Wine's
 exception handling then overflowed its stack (seen with `LOGS=trace`).
 Starting on one core avoided it (3 of 3 starts, against 1 of 3 on all
 cores); the launcher then frees all cores.
+
+With esync, quitting WoW also crashed now and then (WoW's own
+`SmallMemAllocator` check), so GameHub never came back. Wine's esync made a
+handle's cache entry visible before its file descriptor was stored, and
+closed descriptors while other threads still used them.
+`patches/wine-esync-deferred-close.patch` fixes both; the "Build Wine"
+workflow builds it as `wine-ntdll-esync-fix`. Put its `ntdll.so` and
+`ntdll.dll` in `Download/Thor-Forever/wine-test/`. With it, 3 of 3 quits
+returned to GameHub.
 
 Put the files in place first:
 

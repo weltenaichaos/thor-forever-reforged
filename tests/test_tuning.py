@@ -18,7 +18,7 @@ WINE_SWAP = re.search(r'^tf_sha256\(\)\n.*?^}\n', LAUNCHER, re.M | re.S).group(0
     r'^# WINE=test swaps in.*?^print -r -- "WINE_NTDLL_DLL_SHA256=\$tf_hash"\n', LAUNCHER, re.M | re.S).group(0)
 ENTRY_CLEANUP = re.search(r'^# Each launch leaves ENTRY.*?^esac\n', LAUNCHER, re.M | re.S).group(0)
 DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=off DRIVER=installed SHADER_CACHE=on DXVK=installed DXVK_TILER=auto PROFILE=off AFFINITY=all TURNIP_MODE=auto WINE=installed'
-SHIPPED = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=on DRIVER=test SHADER_CACHE=on DXVK=test DXVK_TILER=off PROFILE=off AFFINITY=one-then-all TURNIP_MODE=auto WINE=installed'
+SHIPPED = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=on DRIVER=test SHADER_CACHE=on DXVK=test DXVK_TILER=off PROFILE=off AFFINITY=one-then-all TURNIP_MODE=auto WINE=test'
 
 
 class TuningTests(unittest.TestCase):
@@ -46,6 +46,7 @@ class TuningTests(unittest.TestCase):
             SHIPPED,
             'DRIVER=test, but driver-test/libvulkan_freedreno.so is missing: using the installed driver.',
             'DXVK=test, but dxvk-test/dxgi.dll is missing: using the installed DXVK.',
+            'WINE=test, but wine-test/ntdll.so is missing: using the installed Wine.',
             'ESYNC=on only works with DRIVER=test: esync stays off.',
             'ESYNC_ENV=0'])
 
