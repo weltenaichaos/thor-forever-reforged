@@ -1,14 +1,15 @@
 --- a/dlls/ntdll/unix/esync.c
 +++ b/dlls/ntdll/unix/esync.c
-@@ -35,6 +35,7 @@
+@@ -35,6 +35,8 @@
  # include <sys/stat.h>
  #endif
  #include <poll.h>
 +#include <sched.h>
++#include <time.h>
  #include <sys/types.h>
  #include <unistd.h>
  
-@@ -162,9 +163,24 @@
+@@ -162,9 +164,24 @@
      return idx % ESYNC_LIST_BLOCK_SIZE;
  }
  
@@ -33,7 +34,7 @@
  
      if (entry >= ESYNC_LIST_ENTRIES)
      {
-@@ -185,12 +201,15 @@
+@@ -185,12 +202,15 @@
          }
      }
  
@@ -53,7 +54,7 @@
  }
  
  static struct esync *get_cached_object( HANDLE handle )
-@@ -198,7 +217,7 @@
+@@ -198,7 +218,7 @@
      UINT_PTR entry, idx = handle_to_index( handle, &entry );
  
      if (entry >= ESYNC_LIST_ENTRIES || !esync_list[entry]) return NULL;
@@ -62,30 +63,74 @@
  
      return &esync_list[entry][idx];
  }
-@@ -269,6 +288,22 @@
+@@ -269,6 +289,66 @@
      return ret;
  }
  
 +/* Closing a handle while another thread still waits on or signals it is
 + * legal on Windows, but closing the eventfd right away makes that thread's
 + * poll() or write() fail with POLLNVAL/EBADF, and the fd number can be
-+ * reused at once. Keep the most recently closed fds open a little longer. */
-+#define ESYNC_DEFERRED_CLOSES 1024
-+static int deferred_close_fds[ESYNC_DEFERRED_CLOSES];
-+static LONG deferred_close_next;
++ * reused at once, so a later write() signals the wrong object. Keep closed
++ * fds open for a grace period instead of a fixed number of closes: a game
++ * that churns through thousands of events per second would otherwise reuse
++ * fds while another thread still holds them. */
++#define ESYNC_CLOSE_GRACE_NS  1000000000ULL
++#define ESYNC_CLOSE_MAX       8192
++
++static struct
++{
++    int fd;
++    ULONGLONG time;
++} deferred_closes[ESYNC_CLOSE_MAX];
++static unsigned int deferred_close_head, deferred_close_count, early_close_count;
++static pthread_mutex_t deferred_close_mutex = PTHREAD_MUTEX_INITIALIZER;
++
++static ULONGLONG monotonic_ns(void)
++{
++    struct timespec ts;
++
++    clock_gettime( CLOCK_MONOTONIC, &ts );
++    return (ULONGLONG)ts.tv_sec * 1000000000 + ts.tv_nsec;
++}
++
++static void close_oldest_deferred(void)
++{
++    close( deferred_closes[deferred_close_head].fd );
++    deferred_close_head = (deferred_close_head + 1) % ESYNC_CLOSE_MAX;
++    deferred_close_count--;
++}
 +
 +static void esync_close_fd_later( int fd )
 +{
-+    LONG slot = (LONG)((ULONG)InterlockedIncrement( &deferred_close_next ) % ESYNC_DEFERRED_CLOSES);
-+    int old = InterlockedExchange( (LONG *)&deferred_close_fds[slot], fd + 1 ) - 1;
++    ULONGLONG now = monotonic_ns();
++    sigset_t sigset;
 +
-+    if (old >= 0) close( old );
++    server_enter_uninterrupted_section( &deferred_close_mutex, &sigset );
++
++    while (deferred_close_count
++           && now - deferred_closes[deferred_close_head].time >= ESYNC_CLOSE_GRACE_NS)
++        close_oldest_deferred();
++
++    if (deferred_close_count == ESYNC_CLOSE_MAX)
++    {
++        /* More closes than the fd budget allows within the grace period. */
++        if (early_close_count++ < 10)
++            ERR( "closing fd %d after only %llu ms\n", deferred_closes[deferred_close_head].fd,
++                 (now - deferred_closes[deferred_close_head].time) / 1000000 );
++        close_oldest_deferred();
++    }
++
++    deferred_closes[(deferred_close_head + deferred_close_count) % ESYNC_CLOSE_MAX].fd = fd;
++    deferred_closes[(deferred_close_head + deferred_close_count) % ESYNC_CLOSE_MAX].time = now;
++    deferred_close_count++;
++
++    server_leave_uninterrupted_section( &deferred_close_mutex, &sigset );
 +}
 +
  NTSTATUS esync_close( HANDLE handle )
  {
      UINT_PTR entry, idx = handle_to_index( handle, &entry );
-@@ -277,10 +312,16 @@
+@@ -277,10 +357,16 @@
  
      if (entry < ESYNC_LIST_ENTRIES && esync_list[entry])
      {
