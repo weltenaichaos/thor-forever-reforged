@@ -1,6 +1,16 @@
 --- a/dlls/ntdll/unix/esync.c
 +++ b/dlls/ntdll/unix/esync.c
-@@ -35,6 +35,7 @@
+@@ -29,12 +29,17 @@
+ #include <fcntl.h>
+ #include <stdarg.h>
+ #include <stdint.h>
++#include <stdio.h>
+ #include <stdlib.h>
++#include <string.h>
+ #include <sys/mman.h>
++#include <sys/resource.h>
++#include <dirent.h>
+ #ifdef HAVE_SYS_STAT_H
  # include <sys/stat.h>
  #endif
  #include <poll.h>
@@ -8,7 +18,7 @@
  #include <sys/types.h>
  #include <unistd.h>
  
-@@ -162,9 +163,24 @@
+@@ -162,9 +167,24 @@
      return idx % ESYNC_LIST_BLOCK_SIZE;
  }
  
@@ -33,7 +43,7 @@
  
      if (entry >= ESYNC_LIST_ENTRIES)
      {
-@@ -185,12 +201,15 @@
+@@ -185,12 +205,20 @@
          }
      }
  
@@ -48,12 +58,17 @@
 +        __atomic_store_n( (LONG *)&obj->type, type, __ATOMIC_RELEASE );
      }
 -    return &esync_list[entry][idx];
-+    else load_slot_type( obj );
++    else
++    {
++        /* Another thread cached this handle first; ours is a duplicate. */
++        load_slot_type( obj );
++        if (fd >= 0 && fd != obj->fd) close( fd );
++    }
 +    return obj;
  }
  
  static struct esync *get_cached_object( HANDLE handle )
-@@ -198,7 +217,7 @@
+@@ -198,7 +226,7 @@
      UINT_PTR entry, idx = handle_to_index( handle, &entry );
  
      if (entry >= ESYNC_LIST_ENTRIES || !esync_list[entry]) return NULL;
@@ -62,7 +77,101 @@
  
      return &esync_list[entry][idx];
  }
-@@ -269,6 +288,22 @@
+@@ -207,6 +235,68 @@
+  * semaphore, etc. created using create_esync) or a generic synchronizable
+  * server-side object which the server will signal (e.g. a process, thread,
+  * message queue, etc.) */
++/* Some other code in the process (seen with GPU drivers that close fence
++ * fds twice) can close an fd number it no longer owns. New fds get the
++ * lowest free number, so such a stray close() easily hits a recent esync
++ * fd: its writes then fail with EBADF and the signal is lost, or the number
++ * is reused and the wrong object is signaled. Keep esync fds in a high range
++ * that normal allocations never reach. */
++#define ESYNC_FD_BASE 16384
++
++static int esync_move_fd_high( int fd )
++{
++    int high;
++
++    if (fd < 0 || fd >= ESYNC_FD_BASE) return fd;
++    if ((high = fcntl( fd, F_DUPFD_CLOEXEC, ESYNC_FD_BASE )) < 0) return fd;
++    close( fd );
++    return high;
++}
++
++/* The server answered but no fd arrived with its message. The kernel drops
++ * a passed fd when the process cannot take another one, so log how many
++ * fds are open and of which kind, to see what fills the table. */
++static void log_missing_fd( HANDLE handle, int type )
++{
++    static LONG logged;
++    unsigned int total = 0, eventfds = 0, syncfiles = 0, anon = 0, sockets = 0, devices = 0, files = 0;
++    int highest = -1;
++    struct rlimit rl = { 0 };
++    char path[64], target[256];
++    struct dirent *de;
++    DIR *dir;
++
++    if (InterlockedIncrement( &logged ) > 20) return;
++    getrlimit( RLIMIT_NOFILE, &rl );
++    if ((dir = opendir( "/proc/self/fd" )))
++    {
++        while ((de = readdir( dir )))
++        {
++            ssize_t len;
++            int n;
++
++            if (de->d_name[0] < '0' || de->d_name[0] > '9') continue;
++            n = atoi( de->d_name );
++            total++;
++            if (n > highest) highest = n;
++            snprintf( path, sizeof(path), "/proc/self/fd/%d", n );
++            if ((len = readlink( path, target, sizeof(target) - 1 )) <= 0) continue;
++            target[len] = 0;
++            if (strstr( target, "eventfd" )) eventfds++;
++            else if (strstr( target, "sync_file" )) syncfiles++;
++            else if (!strncmp( target, "anon_inode:", 11 )) anon++;
++            else if (!strncmp( target, "socket:", 7 )) sockets++;
++            else if (!strncmp( target, "/dev/", 5 )) devices++;
++            else files++;
++        }
++        closedir( dir );
++    }
++    ERR( "no fd received for handle %p (type %d): %u fds open (limit %llu, highest %d): "
++         "%u eventfd, %u sync_file, %u other anon, %u socket, %u device, %u file/pipe\n",
++         handle, type, total, (unsigned long long)rl.rlim_cur, highest,
++         eventfds, syncfiles, anon, sockets, devices, files );
++}
++
+ static NTSTATUS get_object( HANDLE handle, struct esync **obj )
+ {
+     NTSTATUS ret = STATUS_SUCCESS;
+@@ -242,7 +332,7 @@
+             {
+                 type = reply->type;
+                 shm_idx = reply->sync_shm_idx;
+-                fd = wine_server_receive_fd( &fd_handle );
++                fd = esync_move_fd_high( wine_server_receive_fd( &fd_handle ) );
+                 assert( wine_server_ptr_handle(fd_handle) == handle );
+             }
+         }
+@@ -263,12 +353,38 @@
+         return ret;
+     }
+ 
++    if (fd < 0)
++    {
++        /* Caching fd -1 would make every later signal of this object fail
++         * and every wait on it hang. Don't cache it; the caller falls back
++         * to the server, and the next call asks for the fd again. */
++        log_missing_fd( handle, type );
++        *obj = NULL;
++        return STATUS_NOT_IMPLEMENTED;
++    }
++
+     TRACE("Got fd %d for handle %p.\n", fd, handle);
+ 
+     *obj = add_to_list( handle, type, fd, shm_idx ? get_shm( shm_idx ) : 0 );
      return ret;
  }
  
@@ -85,7 +194,7 @@
  NTSTATUS esync_close( HANDLE handle )
  {
      UINT_PTR entry, idx = handle_to_index( handle, &entry );
-@@ -277,10 +312,16 @@
+@@ -277,10 +393,16 @@
  
      if (entry < ESYNC_LIST_ENTRIES && esync_list[entry])
      {
@@ -105,3 +214,21 @@
          }
      }
  
+@@ -511,7 +633,7 @@
+     if (!InterlockedExchange( (LONG *)&event->signaled, 1 ) || obj->type == ESYNC_AUTO_EVENT)
+     {
+         if (write( obj->fd, &value, sizeof(value) ) == -1)
+-            ERR("write: %s\n", strerror(errno));
++            ERR("write: %s (handle %p, fd %d)\n", strerror(errno), handle, obj->fd);
+     }
+ 
+     if (obj->type == ESYNC_MANUAL_EVENT)
+@@ -798,7 +920,7 @@
+         {
+             if (!(ret = wine_server_call( req )))
+             {
+-                fd = wine_server_receive_fd( &fd_handle );
++                fd = esync_move_fd_high( wine_server_receive_fd( &fd_handle ) );
+                 assert( fd_handle == (GetCurrentThreadId() | 1) );
+             }
+         }
