@@ -1,6 +1,68 @@
 --- a/dlls/ntdll/unix/esync.c
 +++ b/dlls/ntdll/unix/esync.c
-@@ -269,6 +269,22 @@
+@@ -35,6 +35,7 @@
+ # include <sys/stat.h>
+ #endif
+ #include <poll.h>
++#include <sched.h>
+ #include <sys/types.h>
+ #include <unistd.h>
+ 
+@@ -162,9 +163,24 @@
+     return idx % ESYNC_LIST_BLOCK_SIZE;
+ }
+ 
++/* A cache slot is claimed with this type while its fd and shm are filled in.
++ * On ARM64, another thread may otherwise see the new type together with the
++ * fd and shm of the object that used the slot before. */
++#define ESYNC_TYPE_PENDING  ((LONG)-1)
++
++static LONG load_slot_type( struct esync *obj )
++{
++    LONG type;
++
++    while ((type = __atomic_load_n( (LONG *)&obj->type, __ATOMIC_ACQUIRE )) == ESYNC_TYPE_PENDING)
++        sched_yield();
++    return type;
++}
++
+ static struct esync *add_to_list( HANDLE handle, enum esync_type type, int fd, void *shm )
+ {
+     UINT_PTR entry, idx = handle_to_index( handle, &entry );
++    struct esync *obj;
+ 
+     if (entry >= ESYNC_LIST_ENTRIES)
+     {
+@@ -185,12 +201,15 @@
+         }
+     }
+ 
+-    if (!InterlockedCompareExchange( (LONG *)&esync_list[entry][idx].type, type, 0 ))
++    obj = &esync_list[entry][idx];
++    if (!InterlockedCompareExchange( (LONG *)&obj->type, ESYNC_TYPE_PENDING, 0 ))
+     {
+-        esync_list[entry][idx].fd = fd;
+-        esync_list[entry][idx].shm = shm;
++        obj->fd = fd;
++        obj->shm = shm;
++        __atomic_store_n( (LONG *)&obj->type, type, __ATOMIC_RELEASE );
+     }
+-    return &esync_list[entry][idx];
++    else load_slot_type( obj );
++    return obj;
+ }
+ 
+ static struct esync *get_cached_object( HANDLE handle )
+@@ -198,7 +217,7 @@
+     UINT_PTR entry, idx = handle_to_index( handle, &entry );
+ 
+     if (entry >= ESYNC_LIST_ENTRIES || !esync_list[entry]) return NULL;
+-    if (!esync_list[entry][idx].type) return NULL;
++    if (!load_slot_type( &esync_list[entry][idx] )) return NULL;
+ 
+     return &esync_list[entry][idx];
+ }
+@@ -269,6 +288,22 @@
      return ret;
  }
  
@@ -23,12 +85,23 @@
  NTSTATUS esync_close( HANDLE handle )
  {
      UINT_PTR entry, idx = handle_to_index( handle, &entry );
-@@ -279,7 +295,7 @@
+@@ -277,10 +312,16 @@
+ 
+     if (entry < ESYNC_LIST_ENTRIES && esync_list[entry])
      {
-         if (InterlockedExchange((LONG *)&esync_list[entry][idx].type, 0))
+-        if (InterlockedExchange((LONG *)&esync_list[entry][idx].type, 0))
++        struct esync *obj = &esync_list[entry][idx];
++        LONG type;
++
++        while ((type = load_slot_type( obj )))
          {
 -            close( esync_list[entry][idx].fd );
-+            esync_close_fd_later( esync_list[entry][idx].fd );
-             return STATUS_SUCCESS;
+-            return STATUS_SUCCESS;
++            if (InterlockedCompareExchange( (LONG *)&obj->type, 0, type ) == type)
++            {
++                esync_close_fd_later( obj->fd );
++                return STATUS_SUCCESS;
++            }
          }
      }
+ 
