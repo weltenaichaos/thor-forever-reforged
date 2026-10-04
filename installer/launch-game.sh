@@ -296,6 +296,16 @@ tf_sha256 "$tf_ntdll"
 print -r -- "WINE_NTDLL_SHA256=$tf_hash"
 tf_sha256 "$tf_ntdll_pe"
 print -r -- "WINE_NTDLL_DLL_SHA256=$tf_hash"
+# With LOGS=trace, keep one copy of the installed (original) ntdll pair in
+# Download/Thor-Forever/wine-installed/, to compare it with a rebuilt one.
+if [ "$tf_logs" = trace ] && [ ! -e "$KIT/wine-installed/ntdll.dll" ]; then
+    mkdir -p "$KIT/wine-installed" &&
+        for tf_file in "$tf_ntdll" "$tf_ntdll_pe"; do
+            tf_src=$tf_file
+            [ -e "$tf_file.installed" ] && tf_src=$tf_file.installed
+            cp "$tf_src" "$KIT/wine-installed/${tf_file##*/}" || break
+        done
+fi
 export WINEMU_REPLACED_DRIVER="$DRIVER"
 # Turnip renders either in the GPU's fast on-chip tile memory (gmem) or
 # straight to memory (sysmem) and picks per render pass. Forcing one is a
