@@ -108,6 +108,7 @@ trap 'exit 130' INT TERM HUP
 # validated values are accepted; the file is never executed.
 tf_fps=60 tf_hud=fps,frametimes,compiler tf_logs=off tf_gpl=off tf_esync=off
 tf_driver=installed tf_cache=on tf_dxvk=installed tf_tiler=auto
+tf_profile=off tf_affinity=all tf_tumode=auto
 tf_ws=$' \t\r'
 if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
     while IFS= read -r tf_line || [ -n "$tf_line" ]; do
@@ -127,10 +128,35 @@ if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
             SHADER_CACHE) case "$tf_value" in on|off) tf_cache=$tf_value ;; esac ;;
             DXVK) case "$tf_value" in installed|test) tf_dxvk=$tf_value ;; esac ;;
             DXVK_TILER) case "$tf_value" in auto|on|off) tf_tiler=$tf_value ;; esac ;;
+            PROFILE) case "$tf_value" in on|off) tf_profile=$tf_value ;; esac ;;
+            AFFINITY) case "$tf_value" in all|big|prime3) tf_affinity=$tf_value ;; esac ;;
+            TURNIP_MODE) case "$tf_value" in auto|gmem|sysmem) tf_tumode=$tf_value ;; esac ;;
         esac
     done <"$KIT/tuning.conf"
 fi
-print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync DRIVER=$tf_driver SHADER_CACHE=$tf_cache DXVK=$tf_dxvk DXVK_TILER=$tf_tiler"
+print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync DRIVER=$tf_driver SHADER_CACHE=$tf_cache DXVK=$tf_dxvk DXVK_TILER=$tf_tiler PROFILE=$tf_profile AFFINITY=$tf_affinity TURNIP_MODE=$tf_tumode"
+# The shipped tuning.conf picks the test driver and DXVK. Without their
+# files, fall back to the installed ones instead of refusing to start.
+if [ "$tf_driver" = test ] && { [ ! -s "$KIT/driver-test/libvulkan_freedreno.so" ] || [ -L "$KIT/driver-test/libvulkan_freedreno.so" ]; }; then
+    print -r -- 'DRIVER=test, but driver-test/libvulkan_freedreno.so is missing: using the installed driver.'
+    tf_driver=installed
+fi
+if [ "$tf_dxvk" = test ]; then
+    for dll in dxgi.dll d3d11.dll; do
+        if [ ! -s "$KIT/dxvk-test/$dll" ] || [ -L "$KIT/dxvk-test/$dll" ]; then
+            print -r -- "DXVK=test, but dxvk-test/$dll is missing: using the installed DXVK."
+            tf_dxvk=installed
+            break
+        fi
+    done
+fi
+# With the installed driver, esync made WoW's own waits fail and the game
+# crashed within minutes (2026-10-02); with the Mesa 26.2.3 test driver it
+# ran without errors. So esync is only used together with DRIVER=test.
+if [ "$tf_esync" = on ] && [ "$tf_driver" != test ]; then
+    print -r -- 'ESYNC=on only works with DRIVER=test: esync stays off.'
+    tf_esync=off
+fi
 tf_esync_value=0
 [ "$tf_esync" = on ] && tf_esync_value=1
 export WINEPREFIX="$PREFIX" WINEARCH=win64 WINEESYNC=$tf_esync_value
@@ -149,7 +175,6 @@ export WINEDLLOVERRIDES='dxgi,d3d11=n,b'
 # app-private install first; the installed driver is never touched.
 if [ "$tf_driver" = test ]; then
     tf_test_src="$KIT/driver-test/libvulkan_freedreno.so"
-    [ -s "$tf_test_src" ] && [ ! -L "$tf_test_src" ] || fail 'DRIVER=test, but driver-test/libvulkan_freedreno.so is missing.'
     tf_test_dir="$ROOT/driver-test"
     [ ! -L "$tf_test_dir" ] || fail 'The test driver directory is a link.'
     mkdir -p "$tf_test_dir" || fail 'Cannot create the test driver directory.'
@@ -202,6 +227,12 @@ if [ "$tf_dxvk" = installed ] && [ -e "$ROOT/dxvk-test-active" ]; then
     rm "$ROOT/dxvk-test-active" || fail 'Cannot clear the test DXVK marker.'
 fi
 export WINEMU_REPLACED_DRIVER="$DRIVER"
+# Turnip renders either in the GPU's fast on-chip tile memory (gmem) or
+# straight to memory (sysmem) and picks per render pass. Forcing one is a
+# driver debug option, used here to compare speed.
+case "$tf_tumode" in
+    gmem|sysmem) export TU_DEBUG="$tf_tumode" ;;
+esac
 # Mesa's on-disk shader cache is off by default on Android. It only has an
 # effect with a driver built with the shader cache enabled.
 if [ "$tf_cache" = on ]; then
@@ -214,6 +245,17 @@ if [ "$tf_logs" = on ]; then
     export WINEDEBUG='-all,err+all' DXVK_LOG_LEVEL=info MESA_LOG_LEVEL=warn
 else
     export WINEDEBUG='-all' DXVK_LOG_LEVEL=warn MESA_LOG_LEVEL=error
+    # Esync errors are rare but explain its crashes, so keep them.
+    [ "$tf_esync" = on ] && WINEDEBUG='-all,err+esync'
+fi
+# Faster sync options need kernel support: ntsync needs /dev/ntsync.
+IFS= read -r tf_kernel </proc/sys/kernel/osrelease 2>/dev/null || tf_kernel=unknown
+tf_ntsync=no
+[ -e /dev/ntsync ] && tf_ntsync=yes
+print -r -- "KERNEL=$tf_kernel NTSYNC_DEVICE=$tf_ntsync"
+if [ "$tf_esync" = on ]; then
+    # Esync needs one file descriptor per Windows sync object.
+    print -r -- "FD_LIMIT soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
 fi
 export DXVK_LOG_PATH="Z:\\sdcard\\Download\\Thor-Forever\\INSTALLED-WOW-$n"
 tf_gpl_value=False
@@ -234,9 +276,68 @@ tf_stage=restart-test-prefix
 /system/bin/toybox timeout -k 2 10 "$WINESERVER" -w || exit 13
 tf_stage=game
 cd "$GAME" || exit 18
+# PROFILE=on samples, every 2 seconds, the CPU time and current core of each
+# WoW and wineserver thread, every core's clock and the GPU load into
+# perf.csv. It only reads /proc and /sys with shell builtins.
+tf_profile_loop()
+{
+    while [ -e "$OUT/.profiling" ]; do
+        read -r tf_up _ </proc/uptime || tf_up=0
+        print -r -- "T,$tf_up"
+        for tf_c in /sys/devices/system/cpu/cpu[0-9]*; do
+            IFS= read -r tf_f <"$tf_c/cpufreq/scaling_cur_freq" 2>/dev/null || continue
+            IFS= read -r tf_m <"$tf_c/cpufreq/scaling_max_freq" 2>/dev/null || tf_m=
+            print -r -- "f,${tf_c##*/cpu},$tf_f,$tf_m"
+        done
+        tf_g= tf_gf=
+        IFS= read -r tf_g </sys/class/kgsl/kgsl-3d0/gpu_busy_percentage 2>/dev/null
+        IFS= read -r tf_gf </sys/class/kgsl/kgsl-3d0/devfreq/cur_freq 2>/dev/null
+        print -r -- "g,${tf_g%%[!0-9]*},$tf_gf"
+        tf_gm= tf_gt= tf_gc=
+        IFS= read -r tf_gm </sys/class/kgsl/kgsl-3d0/devfreq/max_freq 2>/dev/null
+        IFS= read -r tf_gt </sys/class/kgsl/kgsl-3d0/thermal_pwrlevel 2>/dev/null
+        IFS= read -r tf_gc </sys/class/kgsl/kgsl-3d0/temp 2>/dev/null
+        print -r -- "L,$tf_gm,$tf_gt,${tf_gc%%[!0-9]*}"
+        for tf_p in /proc/[0-9]*; do
+            IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null || continue
+            case "$tf_n" in WowB-ARM64.exe|wineserver) ;; *) continue ;; esac
+            for tf_t in "$tf_p"/task/[0-9]*; do
+                IFS= read -r tf_tn <"$tf_t/comm" 2>/dev/null || continue
+                IFS= read -r tf_st <"$tf_t/stat" 2>/dev/null || continue
+                set -f
+                set -- ${tf_st##*) }
+                set +f
+                [ "$#" -ge 37 ] || continue
+                print -r -- "t,$tf_n,${tf_t##*/},${tf_tn//[!A-Za-z0-9_.-]/_},${12},${13},${37}"
+            done
+        done
+        /system/bin/toybox sleep 2 >/dev/null 2>&1 </dev/null || break
+    done
+}
+if [ "$tf_profile" = on ]; then
+    : >"$OUT/.profiling" && { tf_profile_loop >"$OUT/perf.csv" 2>/dev/null & }
+fi
+# AFFINITY keeps WoW, Wine and DXVK threads off the small cores. On the
+# Snapdragon 8 Gen 2, cpu0-2 are the small cores and cpu7 is the prime core.
+case "$tf_affinity" in
+    big) set -- /system/bin/toybox taskset f8 ;;
+    prime3) set -- /system/bin/toybox taskset e0 ;;
+    *) set -- ;;
+esac
+# WoW writes its own crash reports into Errors inside the private game
+# folder, where they can't be opened on the device. A crash usually ends
+# this script too, so copy new reports to Download/Thor-Forever/wow-errors
+# at the next launch. Reports copied before are skipped.
+for tf_err in "$GAME/Errors"/*.txt "$GAME/Errors"/*.log; do
+    [ -f "$tf_err" ] && [ ! -L "$tf_err" ] || continue
+    [ -e "$KIT/wow-errors/${tf_err##*/}" ] && continue
+    mkdir -p "$KIT/wow-errors" && cp "$tf_err" "$KIT/wow-errors/" >/dev/null 2>&1 &&
+        print -r -- "WOW_ERROR_REPORT=${tf_err##*/}"
+done
 print -r -- 'Starting WoW in the fresh prefix with separate WTF, Cache and Logs.'
-"$WINELOADER" "$GAME/WowB-ARM64.exe" -d3d11 -config Config-Thor-Forever.wtf >"$OUT/wine.log" 2>&1
+"$@" "$WINELOADER" "$GAME/WowB-ARM64.exe" -d3d11 -config Config-Thor-Forever.wtf >"$OUT/wine.log" 2>&1
 tf_result=$?
+rm -f "$OUT/.profiling"
 print -r -- "WOW_EXIT=$tf_result"
 print -r -- 'TEST_FINISHED'
 exit "$tf_result"

@@ -14,14 +14,19 @@ LAUNCHER = (ROOT / 'installer/launch-game.sh').read_text()
 PARSER = re.search(r'^# Performance settings.*?^export WINEPREFIX=[^\n]*\n', LAUNCHER, re.M | re.S).group(0)
 SWAP = re.search(r'^tf_sha256\(\)\n.*?^}\n', LAUNCHER, re.M | re.S).group(0) + re.search(
     r'^# DXVK=test puts.*?^if \[ "\$tf_dxvk" = installed \].*?^fi\n', LAUNCHER, re.M | re.S).group(0)
-DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=off DRIVER=installed SHADER_CACHE=on DXVK=installed DXVK_TILER=auto'
+DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=off DRIVER=installed SHADER_CACHE=on DXVK=installed DXVK_TILER=auto PROFILE=off AFFINITY=all TURNIP_MODE=auto'
+SHIPPED = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=on DRIVER=test SHADER_CACHE=on DXVK=test DXVK_TILER=off PROFILE=off AFFINITY=all TURNIP_MODE=auto'
 
 
 class TuningTests(unittest.TestCase):
-    def parse(self, content, path='/usr/bin:/bin'):
+    def parse(self, content, path='/usr/bin:/bin', test_files=False):
         with tempfile.TemporaryDirectory(prefix='thor-tuning-') as directory:
             if content is not None:
                 (Path(directory) / 'tuning.conf').write_bytes(content.encode())
+            if test_files:
+                for name in ('driver-test/libvulkan_freedreno.so', 'dxvk-test/dxgi.dll', 'dxvk-test/d3d11.dll'):
+                    (Path(directory) / name).parent.mkdir(exist_ok=True)
+                    (Path(directory) / name).write_text('x')
             script = 'print() { shift; shift; echo "$*"; }\n' + PARSER + 'echo "ESYNC_ENV=$WINEESYNC"\n'
             result = subprocess.run([SHELL, 'sh', '-c', script], capture_output=True, text=True, check=True,
                                     env={'KIT': directory, 'PREFIX': '/x', 'PATH': path})
@@ -30,22 +35,33 @@ class TuningTests(unittest.TestCase):
     def test_missing_file_uses_defaults(self):
         self.assertEqual(self.parse(None), [DEFAULTS, 'ESYNC_ENV=0'])
 
-    def test_shipped_file_matches_defaults(self):
-        self.assertEqual(self.parse((ROOT / 'tuning.conf').read_text()), [DEFAULTS, 'ESYNC_ENV=0'])
+    def test_shipped_file_is_the_best_tested_setup(self):
+        self.assertEqual(self.parse((ROOT / 'tuning.conf').read_text(), test_files=True), [SHIPPED, 'ESYNC_ENV=1'])
+
+    def test_shipped_file_without_test_files_falls_back_safely(self):
+        self.assertEqual(self.parse((ROOT / 'tuning.conf').read_text()), [
+            SHIPPED,
+            'DRIVER=test, but driver-test/libvulkan_freedreno.so is missing: using the installed driver.',
+            'DXVK=test, but dxvk-test/dxgi.dll is missing: using the installed DXVK.',
+            'ESYNC=on only works with DRIVER=test: esync stays off.',
+            'ESYNC_ENV=0'])
+
+    def test_esync_needs_the_test_driver(self):
+        out = self.parse('ESYNC=on\nDRIVER=installed\n', test_files=True)
+        self.assertEqual(out[1:], ['ESYNC=on only works with DRIVER=test: esync stays off.', 'ESYNC_ENV=0'])
 
     def test_all_keys_with_spaces_comments_and_crlf(self):
-        out = self.parse('FPS_CAP = 90 # note\r\nHUD=off\r\nLOGS=on\nGPL=on\nESYNC=on\nDRIVER=test\nSHADER_CACHE=off\nDXVK=test\nDXVK_TILER=off')
-        self.assertEqual(out, ['TUNING FPS_CAP=90 HUD=off LOGS=on GPL=on ESYNC=on DRIVER=test SHADER_CACHE=off DXVK=test DXVK_TILER=off', 'ESYNC_ENV=1'])
+        out = self.parse('FPS_CAP = 90 # note\r\nHUD=off\r\nLOGS=on\nGPL=on\nESYNC=on\nDRIVER=test\nSHADER_CACHE=off\nDXVK=test\nDXVK_TILER=off\nPROFILE=on\nAFFINITY=big\nTURNIP_MODE=gmem', test_files=True)
+        self.assertEqual(out, ['TUNING FPS_CAP=90 HUD=off LOGS=on GPL=on ESYNC=on DRIVER=test SHADER_CACHE=off DXVK=test DXVK_TILER=off PROFILE=on AFFINITY=big TURNIP_MODE=gmem', 'ESYNC_ENV=1'])
 
     def test_parser_runs_no_external_commands(self):
         # On device, GameHub prefixes every external command's output with its
         # own text, which corrupted values; the parser must be shell-only.
-        content = (ROOT / 'tuning.conf').read_text().replace('DRIVER=installed', 'DRIVER=test')
-        out = self.parse(content, path='/nonexistent')
-        self.assertEqual(out[0], DEFAULTS.replace('DRIVER=installed', 'DRIVER=test'))
+        out = self.parse((ROOT / 'tuning.conf').read_text(), path='/nonexistent', test_files=True)
+        self.assertEqual(out, [SHIPPED, 'ESYNC_ENV=1'])
 
     def test_invalid_values_are_ignored(self):
-        out = self.parse('FPS_CAP=abc\nFPS_CAP=12345\nHUD=$(reboot)\nLOGS=maybe\nDRIVER=../evil\nSHADER_CACHE=yes\nDXVK=latest\nDXVK_TILER=maybe\nUNKNOWN=1\n')
+        out = self.parse('FPS_CAP=abc\nFPS_CAP=12345\nHUD=$(reboot)\nLOGS=maybe\nDRIVER=../evil\nSHADER_CACHE=yes\nDXVK=latest\nDXVK_TILER=maybe\nPROFILE=yes\nAFFINITY=f8\nTURNIP_MODE=fast\nUNKNOWN=1\n')
         self.assertEqual(out, [DEFAULTS, 'ESYNC_ENV=0'])
 
 
