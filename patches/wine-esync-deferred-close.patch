@@ -1,0 +1,34 @@
+--- a/dlls/ntdll/unix/esync.c
++++ b/dlls/ntdll/unix/esync.c
+@@ -269,6 +269,22 @@
+     return ret;
+ }
+ 
++/* Closing a handle while another thread still waits on or signals it is
++ * legal on Windows, but closing the eventfd right away makes that thread's
++ * poll() or write() fail with POLLNVAL/EBADF, and the fd number can be
++ * reused at once. Keep the most recently closed fds open a little longer. */
++#define ESYNC_DEFERRED_CLOSES 1024
++static int deferred_close_fds[ESYNC_DEFERRED_CLOSES];
++static LONG deferred_close_next;
++
++static void esync_close_fd_later( int fd )
++{
++    LONG slot = (LONG)((ULONG)InterlockedIncrement( &deferred_close_next ) % ESYNC_DEFERRED_CLOSES);
++    int old = InterlockedExchange( (LONG *)&deferred_close_fds[slot], fd + 1 ) - 1;
++
++    if (old >= 0) close( old );
++}
++
+ NTSTATUS esync_close( HANDLE handle )
+ {
+     UINT_PTR entry, idx = handle_to_index( handle, &entry );
+@@ -279,7 +295,7 @@
+     {
+         if (InterlockedExchange((LONG *)&esync_list[entry][idx].type, 0))
+         {
+-            close( esync_list[entry][idx].fd );
++            esync_close_fd_later( esync_list[entry][idx].fd );
+             return STATUS_SUCCESS;
+         }
+     }

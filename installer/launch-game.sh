@@ -108,7 +108,7 @@ trap 'exit 130' INT TERM HUP
 # validated values are accepted; the file is never executed.
 tf_fps=60 tf_hud=fps,frametimes,compiler tf_logs=off tf_gpl=off tf_esync=off
 tf_driver=installed tf_cache=on tf_dxvk=installed tf_tiler=auto
-tf_profile=off tf_affinity=all tf_tumode=auto
+tf_profile=off tf_affinity=all tf_tumode=auto tf_wine=installed
 tf_ws=$' \t\r'
 if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
     while IFS= read -r tf_line || [ -n "$tf_line" ]; do
@@ -131,10 +131,11 @@ if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
             PROFILE) case "$tf_value" in on|off) tf_profile=$tf_value ;; esac ;;
             AFFINITY) case "$tf_value" in all|big|prime3) tf_affinity=$tf_value ;; esac ;;
             TURNIP_MODE) case "$tf_value" in auto|gmem|sysmem) tf_tumode=$tf_value ;; esac ;;
+            WINE) case "$tf_value" in installed|test) tf_wine=$tf_value ;; esac ;;
         esac
     done <"$KIT/tuning.conf"
 fi
-print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync DRIVER=$tf_driver SHADER_CACHE=$tf_cache DXVK=$tf_dxvk DXVK_TILER=$tf_tiler PROFILE=$tf_profile AFFINITY=$tf_affinity TURNIP_MODE=$tf_tumode"
+print -r -- "TUNING FPS_CAP=$tf_fps HUD=$tf_hud LOGS=$tf_logs GPL=$tf_gpl ESYNC=$tf_esync DRIVER=$tf_driver SHADER_CACHE=$tf_cache DXVK=$tf_dxvk DXVK_TILER=$tf_tiler PROFILE=$tf_profile AFFINITY=$tf_affinity TURNIP_MODE=$tf_tumode WINE=$tf_wine"
 # The shipped tuning.conf picks the test driver and DXVK. Without their
 # files, fall back to the installed ones instead of refusing to start.
 if [ "$tf_driver" = test ] && { [ ! -s "$KIT/driver-test/libvulkan_freedreno.so" ] || [ -L "$KIT/driver-test/libvulkan_freedreno.so" ]; }; then
@@ -149,6 +150,10 @@ if [ "$tf_dxvk" = test ]; then
             break
         fi
     done
+fi
+if [ "$tf_wine" = test ] && { [ ! -s "$KIT/wine-test/ntdll.so" ] || [ -L "$KIT/wine-test/ntdll.so" ]; }; then
+    print -r -- 'WINE=test, but wine-test/ntdll.so is missing: using the installed Wine.'
+    tf_wine=installed
 fi
 # With the installed driver, esync made WoW's own waits fail and the game
 # crashed within minutes (2026-10-02); with the Mesa 26.2.3 test driver it
@@ -226,6 +231,29 @@ done
 if [ "$tf_dxvk" = installed ] && [ -e "$ROOT/dxvk-test-active" ]; then
     rm "$ROOT/dxvk-test-active" || fail 'Cannot clear the test DXVK marker.'
 fi
+# WINE=test swaps in Download/Thor-Forever/wine-test/ntdll.so (from the
+# "Build Wine" workflow: the same Wine source plus this repo's esync fix).
+# The installed ntdll.so is kept as ntdll.so.installed and put back by the
+# next WINE=installed launch, also after an interrupted swap.
+tf_ntdll="$RUNTIME/lib/wine/aarch64-unix/ntdll.so"
+[ ! -L "$tf_ntdll" ] || fail 'The runtime ntdll.so is a link.'
+if [ "$tf_wine" = test ]; then
+    if [ ! -e "$ROOT/wine-test-active" ]; then
+        cp "$tf_ntdll" "$tf_ntdll.installed.tmp" && mv "$tf_ntdll.installed.tmp" "$tf_ntdll.installed" ||
+            fail 'Cannot keep a copy of the installed ntdll.so.'
+        : >"$ROOT/wine-test-active" || fail 'Cannot mark the test Wine as active.'
+    fi
+    if ! cmp -s "$KIT/wine-test/ntdll.so" "$tf_ntdll"; then
+        cp "$KIT/wine-test/ntdll.so" "$tf_ntdll.tmp" && mv "$tf_ntdll.tmp" "$tf_ntdll" ||
+            fail 'Cannot copy the test ntdll.so.'
+    fi
+elif [ -e "$ROOT/wine-test-active" ]; then
+    cp "$tf_ntdll.installed" "$tf_ntdll.tmp" && mv "$tf_ntdll.tmp" "$tf_ntdll" ||
+        fail 'Cannot restore the installed ntdll.so.'
+    rm "$ROOT/wine-test-active" || fail 'Cannot clear the test Wine marker.'
+fi
+tf_sha256 "$tf_ntdll"
+print -r -- "WINE_NTDLL_SHA256=$tf_hash"
 export WINEMU_REPLACED_DRIVER="$DRIVER"
 # Turnip renders either in the GPU's fast on-chip tile memory (gmem) or
 # straight to memory (sysmem) and picks per render pass. Forcing one is a

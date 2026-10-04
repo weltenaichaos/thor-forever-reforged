@@ -14,8 +14,10 @@ LAUNCHER = (ROOT / 'installer/launch-game.sh').read_text()
 PARSER = re.search(r'^# Performance settings.*?^export WINEPREFIX=[^\n]*\n', LAUNCHER, re.M | re.S).group(0)
 SWAP = re.search(r'^tf_sha256\(\)\n.*?^}\n', LAUNCHER, re.M | re.S).group(0) + re.search(
     r'^# DXVK=test puts.*?^if \[ "\$tf_dxvk" = installed \].*?^fi\n', LAUNCHER, re.M | re.S).group(0)
-DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=off DRIVER=installed SHADER_CACHE=on DXVK=installed DXVK_TILER=auto PROFILE=off AFFINITY=all TURNIP_MODE=auto'
-SHIPPED = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=on DRIVER=test SHADER_CACHE=on DXVK=test DXVK_TILER=off PROFILE=off AFFINITY=all TURNIP_MODE=auto'
+WINE_SWAP = re.search(r'^tf_sha256\(\)\n.*?^}\n', LAUNCHER, re.M | re.S).group(0) + re.search(
+    r'^# WINE=test swaps in.*?^print -r -- "WINE_NTDLL_SHA256=\$tf_hash"\n', LAUNCHER, re.M | re.S).group(0)
+DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=off DRIVER=installed SHADER_CACHE=on DXVK=installed DXVK_TILER=auto PROFILE=off AFFINITY=all TURNIP_MODE=auto WINE=installed'
+SHIPPED = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=on DRIVER=test SHADER_CACHE=on DXVK=test DXVK_TILER=off PROFILE=off AFFINITY=all TURNIP_MODE=auto WINE=installed'
 
 
 class TuningTests(unittest.TestCase):
@@ -24,7 +26,7 @@ class TuningTests(unittest.TestCase):
             if content is not None:
                 (Path(directory) / 'tuning.conf').write_bytes(content.encode())
             if test_files:
-                for name in ('driver-test/libvulkan_freedreno.so', 'dxvk-test/dxgi.dll', 'dxvk-test/d3d11.dll'):
+                for name in ('driver-test/libvulkan_freedreno.so', 'dxvk-test/dxgi.dll', 'dxvk-test/d3d11.dll', 'wine-test/ntdll.so'):
                     (Path(directory) / name).parent.mkdir(exist_ok=True)
                     (Path(directory) / name).write_text('x')
             script = 'print() { shift; shift; echo "$*"; }\n' + PARSER + 'echo "ESYNC_ENV=$WINEESYNC"\n'
@@ -51,8 +53,8 @@ class TuningTests(unittest.TestCase):
         self.assertEqual(out[1:], ['ESYNC=on only works with DRIVER=test: esync stays off.', 'ESYNC_ENV=0'])
 
     def test_all_keys_with_spaces_comments_and_crlf(self):
-        out = self.parse('FPS_CAP = 90 # note\r\nHUD=off\r\nLOGS=on\nGPL=on\nESYNC=on\nDRIVER=test\nSHADER_CACHE=off\nDXVK=test\nDXVK_TILER=off\nPROFILE=on\nAFFINITY=big\nTURNIP_MODE=gmem', test_files=True)
-        self.assertEqual(out, ['TUNING FPS_CAP=90 HUD=off LOGS=on GPL=on ESYNC=on DRIVER=test SHADER_CACHE=off DXVK=test DXVK_TILER=off PROFILE=on AFFINITY=big TURNIP_MODE=gmem', 'ESYNC_ENV=1'])
+        out = self.parse('FPS_CAP = 90 # note\r\nHUD=off\r\nLOGS=on\nGPL=on\nESYNC=on\nDRIVER=test\nSHADER_CACHE=off\nDXVK=test\nDXVK_TILER=off\nPROFILE=on\nAFFINITY=big\nTURNIP_MODE=gmem\nWINE=test', test_files=True)
+        self.assertEqual(out, ['TUNING FPS_CAP=90 HUD=off LOGS=on GPL=on ESYNC=on DRIVER=test SHADER_CACHE=off DXVK=test DXVK_TILER=off PROFILE=on AFFINITY=big TURNIP_MODE=gmem WINE=test', 'ESYNC_ENV=1'])
 
     def test_parser_runs_no_external_commands(self):
         # On device, GameHub prefixes every external command's output with its
@@ -61,7 +63,7 @@ class TuningTests(unittest.TestCase):
         self.assertEqual(out, [SHIPPED, 'ESYNC_ENV=1'])
 
     def test_invalid_values_are_ignored(self):
-        out = self.parse('FPS_CAP=abc\nFPS_CAP=12345\nHUD=$(reboot)\nLOGS=maybe\nDRIVER=../evil\nSHADER_CACHE=yes\nDXVK=latest\nDXVK_TILER=maybe\nPROFILE=yes\nAFFINITY=f8\nTURNIP_MODE=fast\nUNKNOWN=1\n')
+        out = self.parse('FPS_CAP=abc\nFPS_CAP=12345\nHUD=$(reboot)\nLOGS=maybe\nDRIVER=../evil\nSHADER_CACHE=yes\nDXVK=latest\nDXVK_TILER=maybe\nPROFILE=yes\nAFFINITY=f8\nTURNIP_MODE=fast\nWINE=latest\nUNKNOWN=1\n')
         self.assertEqual(out, [DEFAULTS, 'ESYNC_ENV=0'])
 
 
@@ -106,6 +108,41 @@ class DxvkSwapTests(unittest.TestCase):
         self.assertEqual(self.contents(), ['installed dxgi.dll', 'installed d3d11.dll'])
         self.assertFalse((self.root / 'dxvk-test-active').exists())
 
+
+
+class WineSwapTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='thor-wine-')
+        base = Path(self.tmp.name)
+        self.kit, self.root = base / 'kit', base / 'root'
+        self.unix = self.root / 'runtime/lib/wine/aarch64-unix'
+        for folder in (self.kit / 'wine-test', self.unix):
+            folder.mkdir(parents=True)
+        (self.kit / 'wine-test/ntdll.so').write_text('test ntdll')
+        (self.unix / 'ntdll.so').write_text('installed ntdll')
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def swap(self, mode):
+        script = ('print() { shift; shift; echo "$*"; }\nfail() { echo "STOP: $1"; exit 12; }\n'
+                  f'tf_wine={mode}\n' + WINE_SWAP + 'echo DONE\n')
+        return subprocess.run([SHELL, 'sh', '-c', script], capture_output=True, text=True, env={
+            'KIT': str(self.kit), 'ROOT': str(self.root), 'RUNTIME': str(self.root / 'runtime'), 'PATH': '/usr/bin:/bin'})
+
+    def test_test_then_installed_round_trip(self):
+        self.assertIn('DONE', self.swap('test').stdout)
+        self.assertEqual((self.unix / 'ntdll.so').read_text(), 'test ntdll')
+        self.assertIn('DONE', self.swap('test').stdout)
+        self.assertEqual((self.unix / 'ntdll.so.installed').read_text(), 'installed ntdll')
+        self.assertIn('DONE', self.swap('installed').stdout)
+        self.assertEqual((self.unix / 'ntdll.so').read_text(), 'installed ntdll')
+        self.assertFalse((self.root / 'wine-test-active').exists())
+
+    def test_installed_without_swap_changes_nothing(self):
+        self.assertIn('DONE', self.swap('installed').stdout)
+        self.assertEqual((self.unix / 'ntdll.so').read_text(), 'installed ntdll')
+        self.assertFalse((self.unix / 'ntdll.so.installed').exists())
 
 if __name__ == '__main__':
     unittest.main()
