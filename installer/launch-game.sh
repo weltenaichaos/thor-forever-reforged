@@ -341,6 +341,14 @@ if [ "$tf_esync" = on ]; then
     print -r -- "FD_LIMIT soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
 fi
 export DXVK_LOG_PATH="Z:\\sdcard\\Download\\Thor-Forever\\INSTALLED-WOW-$n"
+# With PROFILE=on, the Thor-tuned DXVK also writes frames.csv: one line per
+# frame with its duration and what DXVK did in it, to find stutters. Other
+# DXVK builds ignore the variable.
+if [ "$tf_profile" = on ]; then
+    export DXVK_FRAME_LOG="$DXVK_LOG_PATH\\frames.csv"
+else
+    unset DXVK_FRAME_LOG
+fi
 tf_gpl_value=False
 [ "$tf_gpl" = on ] && tf_gpl_value=True
 export DXVK_CONFIG="dxvk.enableGraphicsPipelineLibrary = $tf_gpl_value; dxgi.maxFrameRate = $tf_fps"
@@ -360,8 +368,9 @@ tf_stage=restart-test-prefix
 tf_stage=game
 cd "$GAME" || exit 18
 # PROFILE=on samples, every 2 seconds, the CPU time and current core of each
-# WoW and wineserver thread, every core's clock and the GPU load into
-# perf.csv. It only reads /proc and /sys with shell builtins.
+# WoW and wineserver thread, how much WoW has read from storage, every
+# core's clock and the GPU load into perf.csv. It only reads /proc and /sys
+# with shell builtins.
 tf_profile_loop()
 {
     while [ -e "$OUT/.profiling" ]; do
@@ -384,6 +393,14 @@ tf_profile_loop()
         for tf_p in /proc/[0-9]*; do
             IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null || continue
             case "$tf_n" in WowB-ARM64.exe|wineserver) ;; *) continue ;; esac
+            # Bytes WoW has read so far, to see loading bursts.
+            if [ "$tf_n" = WowB-ARM64.exe ]; then
+                tf_rc= tf_rb=
+                { while IFS=': ' read -r tf_key tf_val; do
+                    case "$tf_key" in rchar) tf_rc=$tf_val ;; read_bytes) tf_rb=$tf_val ;; esac
+                done <"$tf_p/io"; } 2>/dev/null
+                print -r -- "i,${tf_p##*/},$tf_rc,$tf_rb"
+            fi
             for tf_t in "$tf_p"/task/[0-9]*; do
                 IFS= read -r tf_tn <"$tf_t/comm" 2>/dev/null || continue
                 IFS= read -r tf_st <"$tf_t/stat" 2>/dev/null || continue

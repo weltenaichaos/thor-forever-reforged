@@ -42,9 +42,11 @@ jobs:
           # Tuning targets the Cortex-X3 that runs WoW's main thread. No SVE,
           # because Wine does not save SVE registers on thread switches.
           # Thin LTO lets the compiler optimize across source files.
+          # It also writes a per-frame log when DXVK_FRAME_LOG is set
+          # (PROFILE=on), to find stutters.
           - name: '2.6.2-thor'
             dxvk_ref: v2.6.2
-            patches: dxvk-arm64-toolchain.patch
+            patches: dxvk-arm64-toolchain.patch dxvk-frame-log.patch
             cpu_args: "'-march=armv8.2-a+fp16+dotprod+rcpc', '-mtune=cortex-x3'"
             meson_args: -Db_lto=true -Db_lto_mode=thin
     env:

@@ -1,0 +1,88 @@
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+index f925b9e..c67274a 100644
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -6,8 +6,75 @@
+ 
+ #include "../util/util_win32_compat.h"
+ 
++#include <fstream>
++
+ namespace dxvk {
+ 
++  /**
++   * \brief Optional per-frame log for finding stutters
++   *
++   * With DXVK_FRAME_LOG set to a file path, every presented frame writes
++   * one CSV line: how long the frame took on the presenting thread and
++   * what DXVK did in it (new pipelines, compiler queue, waits on the CS
++   * thread and on the GPU). Only DXVK's own counters are read.
++   */
++  static void LogFrameStats(const Rc<DxvkDevice>& device) {
++    static dxvk::mutex                       s_mutex;
++    static bool                              s_init = false;
++    static std::ofstream                     s_file;
++    static dxvk::high_resolution_clock::time_point s_start, s_last;
++    static DxvkStatCounters                  s_prev;
++    static uint64_t                          s_frame = 0;
++
++    std::lock_guard<dxvk::mutex> lock(s_mutex);
++
++    if (!s_init) {
++      s_init = true;
++      std::string path = env::getEnvVar("DXVK_FRAME_LOG");
++
++      if (!path.empty()) {
++        s_file = std::ofstream(str::topath(path.c_str()).c_str());
++        s_file << "frame,time_ms,frame_ms,draws,new_pipelines,compiler_queue,cs_wait_ms,gpu_wait_ms,submits\n";
++        s_start = s_last = dxvk::high_resolution_clock::now();
++        s_prev = device->getStatCounters();
++      }
++    }
++
++    if (!s_file.is_open())
++      return;
++
++    auto now = dxvk::high_resolution_clock::now();
++    DxvkStatCounters curr = device->getStatCounters();
++
++    auto ms = [] (auto d) {
++      return double(std::chrono::duration_cast<std::chrono::microseconds>(d).count()) / 1000.0;
++    };
++    auto diff = [&] (DxvkStatCounter c) {
++      uint64_t a = curr.getCtr(c), b = s_prev.getCtr(c);
++      return a >= b ? a - b : uint64_t(0);
++    };
++
++    uint64_t queued = curr.getCtr(DxvkStatCounter::PipeTasksTotal)
++                    - std::min(curr.getCtr(DxvkStatCounter::PipeTasksTotal),
++                               curr.getCtr(DxvkStatCounter::PipeTasksDone));
++
++    s_file << ++s_frame << ',' << ms(now - s_start) << ',' << ms(now - s_last) << ','
++           << diff(DxvkStatCounter::CmdDrawCalls) << ','
++           << diff(DxvkStatCounter::PipeCountGraphics) + diff(DxvkStatCounter::PipeCountCompute) << ','
++           << queued << ','
++           << double(diff(DxvkStatCounter::CsSyncTicks)) / 1000.0 << ','
++           << double(diff(DxvkStatCounter::GpuSyncTicks)) / 1000.0 << ','
++           << diff(DxvkStatCounter::QueueSubmitCount) << '\n';
++
++    // Write out regularly so a crash loses at most a few seconds.
++    if (!(s_frame % 120))
++      s_file.flush();
++
++    s_last = now;
++    s_prev = curr;
++  }
++
++
+   static uint16_t MapGammaControlPoint(float x) {
+     if (x < 0.0f) x = 0.0f;
+     if (x > 1.0f) x = 1.0f;
+@@ -468,6 +535,7 @@ namespace dxvk {
+       }
+     }
+ 
++    LogFrameStats(m_device);
+     return S_OK;
+   }
+ 
