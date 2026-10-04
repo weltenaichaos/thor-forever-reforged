@@ -99,7 +99,7 @@ jobs:
         working-directory: wine
         run: bash build-scripts/build-step-arm64ec.sh --enable-16kb-pages --build
 
-      - name: Package ntdll.so
+      - name: Package ntdll.so and ntdll.dll
         working-directory: wine
         run: |
           so=dlls/ntdll/ntdll.so
@@ -110,16 +110,20 @@ jobs:
             -o "$GITHUB_WORKSPACE/out/ntdll.so" "$so"
           strings "$GITHUB_WORKSPACE/out/ntdll.so" | grep -q 'Wait-any polling on fd' ||
             { echo 'built ntdll.so has no esync'; exit 1; }
+          # The Windows half of ntdll must come from the same build.
+          dll=$(find . -path '*aarch64-windows*' -name ntdll.dll -type f | head -n 1)
+          [ -n "$dll" ] || { echo 'aarch64-windows ntdll.dll not found'; exit 1; }
+          cp "$dll" "$GITHUB_WORKSPACE/out/ntdll.dll"
           {
             echo "wine_repo=$WINE_REPO"
             echo "wine_ref=$WINE_REF"
             echo "repo_commit=$GITHUB_SHA"
-            echo "built_from=$so"
+            echo "built_from=$so $dll"
             echo "patches=$(cd "$GITHUB_WORKSPACE/patches" && ls wine-*.patch | tr '\n' ' ')"
           } > "$GITHUB_WORKSPACE/out/BUILD-INFO.txt"
-          cd "$GITHUB_WORKSPACE/out" && sha256sum ntdll.so > SHA256SUMS.txt
+          cd "$GITHUB_WORKSPACE/out" && sha256sum ntdll.so ntdll.dll > SHA256SUMS.txt
           cat BUILD-INFO.txt SHA256SUMS.txt
-          file ntdll.so
+          file ntdll.so ntdll.dll
 
       - uses: actions/upload-artifact@v4
         with:

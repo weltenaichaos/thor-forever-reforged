@@ -15,7 +15,7 @@ PARSER = re.search(r'^# Performance settings.*?^export WINEPREFIX=[^\n]*\n', LAU
 SWAP = re.search(r'^tf_sha256\(\)\n.*?^}\n', LAUNCHER, re.M | re.S).group(0) + re.search(
     r'^# DXVK=test puts.*?^if \[ "\$tf_dxvk" = installed \].*?^fi\n', LAUNCHER, re.M | re.S).group(0)
 WINE_SWAP = re.search(r'^tf_sha256\(\)\n.*?^}\n', LAUNCHER, re.M | re.S).group(0) + re.search(
-    r'^# WINE=test swaps in.*?^print -r -- "WINE_NTDLL_SHA256=\$tf_hash"\n', LAUNCHER, re.M | re.S).group(0)
+    r'^# WINE=test swaps in.*?^print -r -- "WINE_NTDLL_DLL_SHA256=\$tf_hash"\n', LAUNCHER, re.M | re.S).group(0)
 DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=off DRIVER=installed SHADER_CACHE=on DXVK=installed DXVK_TILER=auto PROFILE=off AFFINITY=all TURNIP_MODE=auto WINE=installed'
 SHIPPED = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=on DRIVER=test SHADER_CACHE=on DXVK=test DXVK_TILER=off PROFILE=off AFFINITY=all TURNIP_MODE=auto WINE=installed'
 
@@ -116,10 +116,14 @@ class WineSwapTests(unittest.TestCase):
         base = Path(self.tmp.name)
         self.kit, self.root = base / 'kit', base / 'root'
         self.unix = self.root / 'runtime/lib/wine/aarch64-unix'
-        for folder in (self.kit / 'wine-test', self.unix):
+        self.pe = self.root / 'runtime/lib/wine/aarch64-windows'
+        self.sys = self.root / 'prefix/drive_c/windows/system32'
+        for folder in (self.kit / 'wine-test', self.unix, self.pe, self.sys):
             folder.mkdir(parents=True)
         (self.kit / 'wine-test/ntdll.so').write_text('test ntdll')
         (self.unix / 'ntdll.so').write_text('installed ntdll')
+        for folder in (self.pe, self.sys):
+            (folder / 'ntdll.dll').write_text('installed dll')
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -128,21 +132,48 @@ class WineSwapTests(unittest.TestCase):
         script = ('print() { shift; shift; echo "$*"; }\nfail() { echo "STOP: $1"; exit 12; }\n'
                   f'tf_wine={mode}\n' + WINE_SWAP + 'echo DONE\n')
         return subprocess.run([SHELL, 'sh', '-c', script], capture_output=True, text=True, env={
-            'KIT': str(self.kit), 'ROOT': str(self.root), 'RUNTIME': str(self.root / 'runtime'), 'PATH': '/usr/bin:/bin'})
+            'KIT': str(self.kit), 'ROOT': str(self.root), 'RUNTIME': str(self.root / 'runtime'),
+            'PREFIX': str(self.root / 'prefix'), 'PATH': '/usr/bin:/bin'})
+
+    def files(self):
+        return [(folder / name).read_text() for folder, name in
+                ((self.unix, 'ntdll.so'), (self.pe, 'ntdll.dll'), (self.sys, 'ntdll.dll'))]
+
+    def leftovers(self):
+        return sorted(path.name for path in self.root.rglob('*') if path.name.endswith(('.installed', '.tmp'))) + \
+            (['wine-test-active'] if (self.root / 'wine-test-active').exists() else [])
 
     def test_test_then_installed_round_trip(self):
         self.assertIn('DONE', self.swap('test').stdout)
-        self.assertEqual((self.unix / 'ntdll.so').read_text(), 'test ntdll')
+        self.assertEqual(self.files(), ['test ntdll', 'installed dll', 'installed dll'])
         self.assertIn('DONE', self.swap('test').stdout)
-        self.assertEqual((self.unix / 'ntdll.so.installed').read_text(), 'installed ntdll')
         self.assertIn('DONE', self.swap('installed').stdout)
-        self.assertEqual((self.unix / 'ntdll.so').read_text(), 'installed ntdll')
-        self.assertFalse((self.root / 'wine-test-active').exists())
+        self.assertEqual(self.files(), ['installed ntdll', 'installed dll', 'installed dll'])
+        self.assertEqual(self.leftovers(), [])
+
+    def test_matching_dll_is_swapped_in_both_places_and_back(self):
+        (self.kit / 'wine-test/ntdll.dll').write_text('test dll')
+        self.assertIn('DONE', self.swap('test').stdout)
+        self.assertEqual(self.files(), ['test ntdll', 'test dll', 'test dll'])
+        (self.kit / 'wine-test/ntdll.dll').unlink()
+        self.assertIn('DONE', self.swap('test').stdout)
+        self.assertEqual(self.files(), ['test ntdll', 'installed dll', 'installed dll'])
+        (self.kit / 'wine-test/ntdll.dll').write_text('test dll')
+        self.assertIn('DONE', self.swap('test').stdout)
+        self.assertIn('DONE', self.swap('installed').stdout)
+        self.assertEqual(self.files(), ['installed ntdll', 'installed dll', 'installed dll'])
+        self.assertEqual(self.leftovers(), [])
 
     def test_installed_without_swap_changes_nothing(self):
         self.assertIn('DONE', self.swap('installed').stdout)
-        self.assertEqual((self.unix / 'ntdll.so').read_text(), 'installed ntdll')
-        self.assertFalse((self.unix / 'ntdll.so.installed').exists())
+        self.assertEqual(self.files(), ['installed ntdll', 'installed dll', 'installed dll'])
+        self.assertEqual(self.leftovers(), [])
+
+    def test_mismatched_prefix_dll_stops(self):
+        (self.sys / 'ntdll.dll').write_text('other dll')
+        out = self.swap('installed').stdout
+        self.assertIn('STOP: The runtime and prefix ntdll.dll differ.', out)
+
 
 if __name__ == '__main__':
     unittest.main()
