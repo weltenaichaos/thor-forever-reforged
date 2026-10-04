@@ -146,7 +146,7 @@ if [ -f "$KIT/tuning.conf" ] && [ ! -L "$KIT/tuning.conf" ]; then
             DXVK) case "$tf_value" in installed|test) tf_dxvk=$tf_value ;; esac ;;
             DXVK_TILER) case "$tf_value" in auto|on|off) tf_tiler=$tf_value ;; esac ;;
             PROFILE) case "$tf_value" in on|off) tf_profile=$tf_value ;; esac ;;
-            AFFINITY) case "$tf_value" in all|big|prime3|one|one-then-all) tf_affinity=$tf_value ;; esac ;;
+            AFFINITY) case "$tf_value" in all|big|prime3|one|one-then-all|one-then-split) tf_affinity=$tf_value ;; esac ;;
             TURNIP_MODE) case "$tf_value" in auto|gmem|sysmem) tf_tumode=$tf_value ;; esac ;;
             WINE) case "$tf_value" in installed|test) tf_wine=$tf_value ;; esac ;;
         esac
@@ -341,6 +341,16 @@ if [ "$tf_esync" = on ]; then
     print -r -- "FD_LIMIT soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
 fi
 export DXVK_LOG_PATH="Z:\\sdcard\\Download\\Thor-Forever\\INSTALLED-WOW-$n"
+# With PROFILE=on, the Thor-tuned DXVK also writes frames.csv: one line per
+# frame with its duration and what DXVK did in it, to find stutters. Other
+# DXVK builds ignore the variable. Our test Wine (WINE=test) also writes,
+# every 5 s, how often and how long threads waited on the wineserver into
+# wine.log ("server-stats" lines).
+if [ "$tf_profile" = on ]; then
+    export DXVK_FRAME_LOG="$DXVK_LOG_PATH\\frames.csv" WINE_SERVER_STATS=1
+else
+    unset DXVK_FRAME_LOG WINE_SERVER_STATS
+fi
 tf_gpl_value=False
 [ "$tf_gpl" = on ] && tf_gpl_value=True
 export DXVK_CONFIG="dxvk.enableGraphicsPipelineLibrary = $tf_gpl_value; dxgi.maxFrameRate = $tf_fps"
@@ -360,11 +370,45 @@ tf_stage=restart-test-prefix
 tf_stage=game
 cd "$GAME" || exit 18
 # PROFILE=on samples, every 2 seconds, the CPU time and current core of each
-# WoW and wineserver thread, every core's clock and the GPU load into
-# perf.csv. It only reads /proc and /sys with shell builtins.
+# WoW and wineserver thread, how much WoW has read from storage, how many
+# files each has open, every core's clock and the GPU load into perf.csv.
+# It only reads /proc and /sys with shell builtins.
+# Prints "k,<kind>,<count>" for the open fds of process $1 (for example
+# eventfd or sync_file), from the link targets toybox ls shows.
+tf_fd_kinds()
+{
+    tf_ke=0 tf_ks=0 tf_kd=0 tf_ka=0 tf_ko= tf_kn=0 tf_kp=0 tf_kg=0 tf_kv=0 tf_kf=0
+    /system/bin/toybox ls -l "$1/fd/" >"$OUT/.fds" 2>/dev/null </dev/null || return
+    while IFS= read -r tf_l; do
+        case "$tf_l" in *' -> '*) ;; *) continue ;; esac
+        case "${tf_l##* -> }" in
+            *eventfd*) tf_ke=$((tf_ke + 1)) ;;
+            *sync_file*) tf_ks=$((tf_ks + 1)) ;;
+            *dmabuf*|/dmabuf*) tf_kd=$((tf_kd + 1)) ;;
+            anon_inode:*) tf_ka=$((tf_ka + 1)); tf_ko=${tf_l##* -> } ;;
+            socket:*) tf_kn=$((tf_kn + 1)) ;;
+            pipe:*) tf_kp=$((tf_kp + 1)) ;;
+            /dev/kgsl*) tf_kg=$((tf_kg + 1)) ;;
+            /dev/*) tf_kv=$((tf_kv + 1)) ;;
+            *) tf_kf=$((tf_kf + 1)) ;;
+        esac
+    done <"$OUT/.fds"
+    rm -f "$OUT/.fds"
+    print -r -- "k,eventfd,$tf_ke"
+    print -r -- "k,sync_file,$tf_ks"
+    print -r -- "k,dmabuf,$tf_kd"
+    print -r -- "k,other_anon(${tf_ko//[!A-Za-z0-9_:.]/_}),$tf_ka"
+    print -r -- "k,socket,$tf_kn"
+    print -r -- "k,pipe,$tf_kp"
+    print -r -- "k,kgsl,$tf_kg"
+    print -r -- "k,other_dev,$tf_kv"
+    print -r -- "k,file,$tf_kf"
+}
 tf_profile_loop()
 {
+    tf_tick=0
     while [ -e "$OUT/.profiling" ]; do
+        tf_tick=$((tf_tick + 1))
         read -r tf_up _ </proc/uptime || tf_up=0
         print -r -- "T,$tf_up"
         for tf_c in /sys/devices/system/cpu/cpu[0-9]*; do
@@ -384,6 +428,20 @@ tf_profile_loop()
         for tf_p in /proc/[0-9]*; do
             IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null || continue
             case "$tf_n" in WowB-ARM64.exe|wineserver) ;; *) continue ;; esac
+            # Open files (fds), to see a leak filling the fd table.
+            set -- "$tf_p"/fd/*
+            [ "$1" != "$tf_p/fd/*" ] && print -r -- "n,$tf_n,${tf_p##*/},$#"
+            # Every 30 s while WoW has many open, count them by kind.
+            [ "$tf_n" = WowB-ARM64.exe ] && [ "$#" -gt 1000 ] && [ $((tf_tick % 15)) = 0 ] &&
+                tf_fd_kinds "$tf_p"
+            # Bytes WoW has read so far, to see loading bursts.
+            if [ "$tf_n" = WowB-ARM64.exe ]; then
+                tf_rc= tf_rb=
+                { while IFS=': ' read -r tf_key tf_val; do
+                    case "$tf_key" in rchar) tf_rc=$tf_val ;; read_bytes) tf_rb=$tf_val ;; esac
+                done <"$tf_p/io"; } 2>/dev/null
+                print -r -- "i,${tf_p##*/},$tf_rc,$tf_rb"
+            fi
             for tf_t in "$tf_p"/task/[0-9]*; do
                 IFS= read -r tf_tn <"$tf_t/comm" 2>/dev/null || continue
                 IFS= read -r tf_st <"$tf_t/stat" 2>/dev/null || continue
@@ -397,8 +455,38 @@ tf_profile_loop()
         /system/bin/toybox sleep 2 >/dev/null 2>&1 </dev/null || break
     done
 }
+# PROFILE=on also samples WoW's main thread every 50 ms into state.csv:
+# whether it runs (R), sleeps (S, waiting for something) or waits on the
+# disk (D), the kernel function it waits in, and from schedstat its total
+# time on a core and waiting for a free core (ns), to see what stutters are.
+tf_state_loop()
+{
+    tf_pid=
+    while [ -e "$OUT/.profiling" ]; do
+        if [ -z "$tf_pid" ] || [ ! -e "/proc/$tf_pid/stat" ]; then
+            tf_pid=
+            for tf_p in /proc/[0-9]*; do
+                IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null || continue
+                [ "$tf_n" = WowB-ARM64.exe ] && { tf_pid=${tf_p##*/}; break; }
+            done
+        fi
+        if [ -n "$tf_pid" ]; then
+            read -r tf_up _ </proc/uptime || tf_up=0
+            tf_st= tf_w= tf_run= tf_rq=
+            IFS= read -r tf_st <"/proc/$tf_pid/task/$tf_pid/stat" 2>/dev/null
+            IFS= read -r tf_w <"/proc/$tf_pid/task/$tf_pid/wchan" 2>/dev/null
+            read -r tf_run tf_rq _ <"/proc/$tf_pid/task/$tf_pid/schedstat" 2>/dev/null
+            tf_st=${tf_st##*) }
+            print -r -- "$tf_up,${tf_st%% *},${tf_w//[!A-Za-z0-9_.]/_},${tf_run//[!0-9]/},${tf_rq//[!0-9]/}"
+        fi
+        /system/bin/toybox sleep 0.05 >/dev/null 2>&1 </dev/null || break
+    done
+}
 if [ "$tf_profile" = on ]; then
-    : >"$OUT/.profiling" && { tf_profile_loop >"$OUT/perf.csv" 2>/dev/null & }
+    : >"$OUT/.profiling" && {
+        tf_profile_loop >"$OUT/perf.csv" 2>/dev/null &
+        tf_state_loop >"$OUT/state.csv" 2>/dev/null &
+    }
 fi
 # AFFINITY keeps WoW, Wine and DXVK threads off the small cores. On the
 # Snapdragon 8 Gen 2, cpu0-2 are the small cores and cpu7 is the prime core.
@@ -407,7 +495,7 @@ case "$tf_affinity" in
     prime3) set -- /system/bin/toybox taskset e0 ;;
     # one = the prime core only. Slow; only for testing whether a crash
     # needs threads running at the same time.
-    one|one-then-all) set -- /system/bin/toybox taskset 80 ;;
+    one|one-then-all|one-then-split) set -- /system/bin/toybox taskset 80 ;;
     *) set -- ;;
 esac
 # WoW writes its own crash reports into Errors inside the private game
@@ -425,22 +513,49 @@ done
 # across threads and the main thread crashes (a blank window); on one core
 # that did not happen in testing. Only threads still limited to cpu7 are
 # changed, a few times so that late new threads are caught as well.
+# one-then-split does the same, but leaves WoW's main thread alone on cpu7
+# and moves every other thread to cpu0-6, so no other thread can take the
+# prime core from it. Threads the main thread starts later inherit cpu7,
+# so it keeps checking every 10 s while WoW runs.
+tf_release_once()
+{
+    for tf_t in /proc/[0-9]*/task/[0-9]*; do
+        tf_allowed=
+        # Threads can end at any moment, so a failed open is silent.
+        { while IFS=$' \t' read -r tf_key tf_val; do
+            [ "$tf_key" = Cpus_allowed_list: ] && { tf_allowed=$tf_val; break; }
+        done <"$tf_t/status"; } 2>/dev/null
+        [ "$tf_allowed" = 7 ] || continue
+        tf_mask=ff
+        if [ "$tf_affinity" = one-then-split ]; then
+            tf_p=${tf_t%/task/*}
+            tf_n=
+            IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null
+            [ "$tf_n" = WowB-ARM64.exe ] && [ "${tf_p##*/}" = "${tf_t##*/}" ] && continue
+            tf_mask=7f
+        fi
+        /system/bin/toybox taskset -p "$tf_mask" "${tf_t##*/}" >/dev/null 2>&1 </dev/null
+    done
+}
 tf_release_cores()
 {
     for tf_wait in 30 15 15 30; do
         /system/bin/toybox sleep "$tf_wait" >/dev/null 2>&1 </dev/null
-        for tf_t in /proc/[0-9]*/task/[0-9]*; do
-            tf_allowed=
-            # Threads can end at any moment, so a failed open is silent.
-            { while IFS=$' \t' read -r tf_key tf_val; do
-                [ "$tf_key" = Cpus_allowed_list: ] && { tf_allowed=$tf_val; break; }
-            done <"$tf_t/status"; } 2>/dev/null
-            [ "$tf_allowed" = 7 ] || continue
-            /system/bin/toybox taskset -p ff "${tf_t##*/}" >/dev/null 2>&1 </dev/null
+        tf_release_once
+    done
+    [ "$tf_affinity" = one-then-split ] || return 0
+    while :; do
+        /system/bin/toybox sleep 10 >/dev/null 2>&1 </dev/null
+        tf_seen=
+        for tf_p in /proc/[0-9]*; do
+            IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null || continue
+            [ "$tf_n" = WowB-ARM64.exe ] && { tf_seen=1; break; }
         done
+        [ -n "$tf_seen" ] || return 0
+        tf_release_once
     done
 }
-[ "$tf_affinity" = one-then-all ] && { tf_release_cores & }
+case "$tf_affinity" in one-then-all|one-then-split) tf_release_cores & ;; esac
 print -r -- 'Starting WoW in the fresh prefix with separate WTF, Cache and Logs.'
 "$@" "$WINELOADER" "$GAME/WowB-ARM64.exe" -d3d11 -config Config-Thor-Forever.wtf >"$OUT/wine.log" 2>&1
 tf_result=$?

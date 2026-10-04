@@ -61,6 +61,10 @@ class TuningTests(unittest.TestCase):
     def test_affinity_one(self):
         self.assertEqual(self.parse('AFFINITY=one\n')[0], DEFAULTS.replace('AFFINITY=all', 'AFFINITY=one'))
 
+    def test_affinity_one_then_split(self):
+        self.assertEqual(self.parse('AFFINITY=one-then-split\n')[0],
+                         DEFAULTS.replace('AFFINITY=all', 'AFFINITY=one-then-split'))
+
     def test_logs_trace(self):
         self.assertEqual(self.parse('LOGS=trace\n')[0], DEFAULTS.replace('LOGS=off', 'LOGS=trace'))
 

@@ -1,0 +1,334 @@
+diff --git a/src/d3d10/d3d10_multithread.h b/src/d3d10/d3d10_multithread.h
+index 75d4060..36ac521 100644
+--- a/src/d3d10/d3d10_multithread.h
++++ b/src/d3d10/d3d10_multithread.h
+@@ -2,6 +2,8 @@
+ 
+ #include "d3d10_include.h"
+ 
++#include "../util/util_api_timer.h"
++
+ namespace dxvk {
+   
+   /**
+@@ -25,27 +27,54 @@ namespace dxvk {
+     }
+ 
+     D3D10DeviceLock(D3D10DeviceLock&& other)
+-    : m_mutex(other.m_mutex) {
++    : m_mutex(other.m_mutex), m_timed(other.m_timed), m_start(other.m_start) {
+       other.m_mutex = nullptr;
++      other.m_timed = false;
+     }
+ 
+     D3D10DeviceLock& operator = (D3D10DeviceLock&& other) {
+       if (m_mutex)
+         m_mutex->unlock();
++      if (m_timed)
++        StopTimer();
+       
+       m_mutex = other.m_mutex;
++      m_timed = other.m_timed;
++      m_start = other.m_start;
+       other.m_mutex = nullptr;
++      other.m_timed = false;
+       return *this;
+     }
+ 
+     ~D3D10DeviceLock() {
+       if (unlikely(m_mutex != nullptr))
+         m_mutex->unlock();
++      if (unlikely(m_timed))
++        StopTimer();
++    }
++
++    /**
++     * \brief Counts the time until this lock is released in \c ApiTimer
++     */
++    void StartTimer() {
++      m_timed = true;
++      m_start = ApiTimer::depth++ ? 0u : ApiTimer::now();
+     }
+ 
+   private:
+ 
+     sync::RecursiveSpinlock* m_mutex;
++    bool                     m_timed = false;
++    uint64_t                 m_start = 0u;
++
++    void StopTimer() {
++      m_timed = false;
++      ApiTimer::depth--;
++      if (m_start) {
++        ApiTimer::ticks.fetch_add(ApiTimer::now() - m_start, std::memory_order_relaxed);
++        ApiTimer::calls.fetch_add(1u, std::memory_order_relaxed);
++      }
++    }
+     
+   };
+ 
+diff --git a/src/d3d11/d3d11_context_imm.h b/src/d3d11/d3d11_context_imm.h
+index 256b469..85cb318 100644
+--- a/src/d3d11/d3d11_context_imm.h
++++ b/src/d3d11/d3d11_context_imm.h
+@@ -94,7 +94,10 @@ namespace dxvk {
+     }
+ 
+     D3D10DeviceLock LockContext() {
+-      return m_multithread.AcquireLock();
++      D3D10DeviceLock lock = m_multithread.AcquireLock();
++      if (unlikely(ApiTimer::enabled.load(std::memory_order_relaxed)))
++        lock.StartTimer();
++      return lock;
+     }
+ 
+     void InjectCsChunk(
+diff --git a/src/d3d11/d3d11_device.cpp b/src/d3d11/d3d11_device.cpp
+index 3a26017..360f470 100644
+--- a/src/d3d11/d3d11_device.cpp
++++ b/src/d3d11/d3d11_device.cpp
+@@ -1,3 +1,4 @@
++#include "d3d11_frame_stats.h"
+ #include <algorithm>
+ #include <cstring>
+ 
+@@ -99,6 +100,8 @@ namespace dxvk {
+     if (!ppBuffer)
+       return S_FALSE;
+     
++    D3D11FrameStatsScope statsScope(D3D11FrameStats::resourceUs, D3D11FrameStats::resourceCount);
++
+     try {
+       const Com<D3D11Buffer> buffer = new D3D11Buffer(this, &desc, nullptr);
+ 
+@@ -236,6 +239,8 @@ namespace dxvk {
+     if (!ppTexture2D)
+       return S_FALSE;
+     
++    D3D11FrameStatsScope statsScope(D3D11FrameStats::resourceUs, D3D11FrameStats::resourceCount);
++
+     try {
+       Com<D3D11Texture2D> texture = new D3D11Texture2D(this, &desc, nullptr, nullptr);
+       m_initializer->InitTexture(texture->GetCommonTexture(), pInitialData);
+@@ -2025,6 +2030,7 @@ namespace dxvk {
+       Logger::warn("D3D11Device::CreateShaderModule: Class linkage not supported");
+ 
+     D3D11CommonShader commonShader;
++    D3D11FrameStatsScope statsScope(D3D11FrameStats::shaderUs, D3D11FrameStats::shaderCount);
+ 
+     HRESULT hr = m_shaderModules.GetShaderModule(this,
+       &ShaderKey, pModuleInfo, pShaderBytecode, BytecodeLength,
+diff --git a/src/d3d11/d3d11_frame_stats.h b/src/d3d11/d3d11_frame_stats.h
+new file mode 100644
+index 0000000..fb708be
+--- /dev/null
++++ b/src/d3d11/d3d11_frame_stats.h
+@@ -0,0 +1,53 @@
++#pragma once
++
++#include <atomic>
++#include <cstdint>
++
++#include "../util/util_time.h"
++
++namespace dxvk {
++
++  /**
++   * \brief Time spent creating shaders and resources, for DXVK_FRAME_LOG
++   *
++   * Only measured while the frame log is on, so normal play pays nothing
++   * beyond one relaxed load per call.
++   */
++  struct D3D11FrameStats {
++    static inline std::atomic<bool>     enabled       = { false };
++    static inline std::atomic<uint64_t> shaderUs      = { 0u };
++    static inline std::atomic<uint64_t> shaderCount   = { 0u };
++    static inline std::atomic<uint64_t> resourceUs    = { 0u };
++    static inline std::atomic<uint64_t> resourceCount = { 0u };
++  };
++
++  class D3D11FrameStatsScope {
++
++  public:
++
++    D3D11FrameStatsScope(std::atomic<uint64_t>& us, std::atomic<uint64_t>& count)
++    : m_us(us), m_count(count), m_on(D3D11FrameStats::enabled.load(std::memory_order_relaxed)) {
++      if (m_on)
++        m_start = dxvk::high_resolution_clock::now();
++    }
++
++    ~D3D11FrameStatsScope() {
++      if (!m_on)
++        return;
++
++      auto us = std::chrono::duration_cast<std::chrono::microseconds>(
++        dxvk::high_resolution_clock::now() - m_start).count();
++      m_us.fetch_add(uint64_t(us), std::memory_order_relaxed);
++      m_count.fetch_add(1u, std::memory_order_relaxed);
++    }
++
++  private:
++
++    std::atomic<uint64_t>& m_us;
++    std::atomic<uint64_t>& m_count;
++    bool m_on;
++    dxvk::high_resolution_clock::time_point m_start;
++
++  };
++
++}
+diff --git a/src/d3d11/d3d11_swapchain.cpp b/src/d3d11/d3d11_swapchain.cpp
+index f925b9e..2470966 100644
+--- a/src/d3d11/d3d11_swapchain.cpp
++++ b/src/d3d11/d3d11_swapchain.cpp
+@@ -1,13 +1,90 @@
+ #include "d3d11_context_imm.h"
+ #include "d3d11_device.h"
+ #include "d3d11_swapchain.h"
++#include "d3d11_frame_stats.h"
+ 
+ #include "../dxvk/dxvk_latency_builtin.h"
+ 
+ #include "../util/util_win32_compat.h"
+ 
++#include <fstream>
++
+ namespace dxvk {
+ 
++  /**
++   * \brief Optional per-frame log for finding stutters
++   *
++   * With DXVK_FRAME_LOG set to a file path, every presented frame writes
++   * one CSV line: how long the frame took on the presenting thread and
++   * what DXVK did in it (new pipelines, compiler queue, waits on the CS
++   * thread and on the GPU). Only DXVK's own counters are read.
++   */
++  static void LogFrameStats(const Rc<DxvkDevice>& device) {
++    static dxvk::mutex                       s_mutex;
++    static bool                              s_init = false;
++    static std::ofstream                     s_file;
++    static dxvk::high_resolution_clock::time_point s_start, s_last;
++    static DxvkStatCounters                  s_prev;
++    static uint64_t                          s_frame = 0;
++    static uint64_t                          s_tickFreq = ApiTimer::frequency();
++
++    std::lock_guard<dxvk::mutex> lock(s_mutex);
++
++    if (!s_init) {
++      s_init = true;
++      std::string path = env::getEnvVar("DXVK_FRAME_LOG");
++
++      if (!path.empty()) {
++        s_file = std::ofstream(str::topath(path.c_str()).c_str());
++        s_file << "frame,time_ms,frame_ms,draws,new_pipelines,compiler_queue,cs_wait_ms,gpu_wait_ms,submits,new_shaders,shader_ms,new_resources,resource_ms,api_ms,api_calls\n";
++        s_start = s_last = dxvk::high_resolution_clock::now();
++        s_prev = device->getStatCounters();
++        D3D11FrameStats::enabled.store(true, std::memory_order_relaxed);
++        ApiTimer::enabled.store(true, std::memory_order_relaxed);
++      }
++    }
++
++    if (!s_file.is_open())
++      return;
++
++    auto now = dxvk::high_resolution_clock::now();
++    DxvkStatCounters curr = device->getStatCounters();
++
++    auto ms = [] (auto d) {
++      return double(std::chrono::duration_cast<std::chrono::microseconds>(d).count()) / 1000.0;
++    };
++    auto diff = [&] (DxvkStatCounter c) {
++      uint64_t a = curr.getCtr(c), b = s_prev.getCtr(c);
++      return a >= b ? a - b : uint64_t(0);
++    };
++
++    uint64_t queued = curr.getCtr(DxvkStatCounter::PipeTasksTotal)
++                    - std::min(curr.getCtr(DxvkStatCounter::PipeTasksTotal),
++                               curr.getCtr(DxvkStatCounter::PipeTasksDone));
++
++    s_file << ++s_frame << ',' << ms(now - s_start) << ',' << ms(now - s_last) << ','
++           << diff(DxvkStatCounter::CmdDrawCalls) << ','
++           << diff(DxvkStatCounter::PipeCountGraphics) + diff(DxvkStatCounter::PipeCountCompute) << ','
++           << queued << ','
++           << double(diff(DxvkStatCounter::CsSyncTicks)) / 1000.0 << ','
++           << double(diff(DxvkStatCounter::GpuSyncTicks)) / 1000.0 << ','
++           << diff(DxvkStatCounter::QueueSubmitCount) << ','
++           << D3D11FrameStats::shaderCount.exchange(0u, std::memory_order_relaxed) << ','
++           << double(D3D11FrameStats::shaderUs.exchange(0u, std::memory_order_relaxed)) / 1000.0 << ','
++           << D3D11FrameStats::resourceCount.exchange(0u, std::memory_order_relaxed) << ','
++           << double(D3D11FrameStats::resourceUs.exchange(0u, std::memory_order_relaxed)) / 1000.0 << ','
++           << double(ApiTimer::ticks.exchange(0u, std::memory_order_relaxed)) * 1000.0 / double(s_tickFreq) << ','
++           << ApiTimer::calls.exchange(0u, std::memory_order_relaxed) << '\n';
++
++    // Write out regularly so a crash loses at most a few seconds.
++    if (!(s_frame % 120))
++      s_file.flush();
++
++    s_last = now;
++    s_prev = curr;
++  }
++
++
+   static uint16_t MapGammaControlPoint(float x) {
+     if (x < 0.0f) x = 0.0f;
+     if (x > 1.0f) x = 1.0f;
+@@ -468,6 +545,7 @@ namespace dxvk {
+       }
+     }
+ 
++    LogFrameStats(m_device);
+     return S_OK;
+   }
+ 
+diff --git a/src/util/util_api_timer.h b/src/util/util_api_timer.h
+new file mode 100644
+index 0000000..449253b
+--- /dev/null
++++ b/src/util/util_api_timer.h
+@@ -0,0 +1,46 @@
++#pragma once
++
++#include <atomic>
++#include <cstdint>
++
++#include "util_time.h"
++
++namespace dxvk {
++
++  /**
++   * \brief Time the game's threads spend inside D3D11 context calls
++   *
++   * For DXVK_FRAME_LOG: shows how much of a frame the game's own thread
++   * spends in DXVK. Off unless the frame log is on. Nested calls are
++   * counted once, from the outermost call.
++   */
++  struct ApiTimer {
++    static inline std::atomic<bool>     enabled = { false };
++    static inline std::atomic<uint64_t> ticks   = { 0u };
++    static inline std::atomic<uint64_t> calls   = { 0u };
++    static inline thread_local uint32_t depth   = 0u;
++
++    static uint64_t now() {
++#if defined(__aarch64__)
++      uint64_t v;
++      asm volatile("mrs %0, cntvct_el0" : "=r" (v));
++      return v;
++#else
++      return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
++        dxvk::high_resolution_clock::now().time_since_epoch()).count());
++#endif
++    }
++
++    /** Ticks per second of \c now() */
++    static uint64_t frequency() {
++#if defined(__aarch64__)
++      uint64_t v;
++      asm volatile("mrs %0, cntfrq_el0" : "=r" (v));
++      return v;
++#else
++      return 1000000000ull;
++#endif
++    }
++  };
++
++}
