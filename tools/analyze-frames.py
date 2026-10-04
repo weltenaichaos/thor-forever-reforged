@@ -4,6 +4,8 @@ Run: python tools/analyze-frames.py INSTALLED-WOW-<n>/frames.csv [start_s end_s]
 A frame counts as a stutter when it takes at least twice as long as the
 frames around it, and at least 25 ms longer. Each stutter gets the most
 likely cause from what DXVK did in that frame or the one before it.
+Shader and resource creation can also run on WoW's loading threads, so
+those causes are likely, not certain.
 """
 from collections import Counter
 import statistics
@@ -45,7 +47,11 @@ def main(path, start=None, end=None):
             continue
         before = picked[i - 1] if i else r
         extra = r['frame_ms'] - normal
-        if r['new_pipelines'] or before['new_pipelines']:
+        if r.get('shader_ms', 0) >= extra / 2:
+            cause = 'creating shaders (DXVK translating them)'
+        elif r.get('resource_ms', 0) >= extra / 2:
+            cause = 'creating textures or buffers'
+        elif r['new_pipelines'] or before['new_pipelines']:
             cause = 'new pipelines (shader compiling)'
         elif r['cs_wait_ms'] >= extra / 2:
             cause = 'waiting on the DXVK CS thread'
@@ -61,10 +67,13 @@ def main(path, start=None, end=None):
     for cause, count in Counter(c for _, _, c in stutters).most_common():
         print(f'  {count:5}  {cause}')
 
-    print('\nWorst stutters (time, frame, normal, new pipelines, CS wait, GPU wait, cause):')
+    print('\nWorst stutters (time, frame, normal, new pipelines, CS wait, GPU wait, '
+          'shaders created, resources created, cause):')
     for r, normal, cause in sorted(stutters, key=lambda s: -s[0]['frame_ms'])[:15]:
         print(f'  {r["time_ms"] / 1000:7.1f} s  {r["frame_ms"]:6.1f} ms  {normal:5.1f} ms  '
-              f'{r["new_pipelines"]:3.0f}  {r["cs_wait_ms"]:6.1f} ms  {r["gpu_wait_ms"]:6.1f} ms  {cause}')
+              f'{r["new_pipelines"]:3.0f}  {r["cs_wait_ms"]:6.1f} ms  {r["gpu_wait_ms"]:6.1f} ms  '
+              f'{r.get("new_shaders", 0):3.0f} / {r.get("shader_ms", 0):6.1f} ms  '
+              f'{r.get("new_resources", 0):4.0f} / {r.get("resource_ms", 0):6.1f} ms  {cause}')
 
     print('\nStutters per 30 s:')
     buckets = Counter(int(r['time_ms'] / 30000) for r, _, _ in stutters)
