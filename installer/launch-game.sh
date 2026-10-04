@@ -220,6 +220,11 @@ else
     # Esync errors are rare but explain its crashes, so keep them.
     [ "$tf_esync" = on ] && WINEDEBUG='-all,err+esync'
 fi
+# Faster sync options need kernel support: ntsync needs /dev/ntsync.
+IFS= read -r tf_kernel </proc/sys/kernel/osrelease 2>/dev/null || tf_kernel=unknown
+tf_ntsync=no
+[ -e /dev/ntsync ] && tf_ntsync=yes
+print -r -- "KERNEL=$tf_kernel NTSYNC_DEVICE=$tf_ntsync"
 if [ "$tf_esync" = on ]; then
     # Esync needs one file descriptor per Windows sync object.
     print -r -- "FD_LIMIT soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
