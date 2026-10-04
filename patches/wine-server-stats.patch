@@ -1,0 +1,110 @@
+diff --git a/dlls/ntdll/unix/server.c b/dlls/ntdll/unix/server.c
+index f11f749..7983e48 100644
+--- a/dlls/ntdll/unix/server.c
++++ b/dlls/ntdll/unix/server.c
+@@ -45,6 +45,8 @@
+ #include <sys/types.h>
+ #include <sys/mman.h>
+ #include <sys/socket.h>
++#include <sys/syscall.h>
++#include <time.h>
+ #include <sys/wait.h>
+ #ifdef HAVE_SYS_UN_H
+ #include <sys/un.h>
+@@ -289,17 +291,96 @@ static inline unsigned int wait_reply( struct __server_request_info *req )
+ /***********************************************************************
+  *           server_call_unlocked
+  */
++/* With WINE_SERVER_STATS=1 (the launcher's PROFILE=on), count how often
++ * and how long threads wait for wineserver replies, and print a summary to
++ * stderr every 5 seconds: all threads, the main thread (whose unix tid is
++ * the process id), and the main thread's most expensive request types. */
++#define SERVER_STATS_SLOTS 64
++static int server_stats_on = -1;
++static __thread int server_stats_main = -1;
++static LONG server_stats_all_count;
++static LONG64 server_stats_all_ns;
++static unsigned long long server_stats_next;
++static unsigned int server_stats_count;
++static unsigned long long server_stats_ns;
++static struct
++{
++    const char *name;
++    unsigned int count;
++    unsigned long long ns;
++} server_stats[SERVER_STATS_SLOTS];
++
++static unsigned long long server_stats_now(void)
++{
++    struct timespec ts;
++    clock_gettime( CLOCK_MONOTONIC, &ts );
++    return ts.tv_sec * 1000000000ull + ts.tv_nsec;
++}
++
++static void server_stats_add( const char *name, unsigned long long start )
++{
++    unsigned long long now = server_stats_now(), ns = now - start;
++    unsigned int i, j, top[6];
++
++    __atomic_add_fetch( &server_stats_all_count, 1, __ATOMIC_RELAXED );
++    __atomic_add_fetch( &server_stats_all_ns, ns, __ATOMIC_RELAXED );
++
++    if (server_stats_main == -1) server_stats_main = syscall( SYS_gettid ) == getpid();
++    if (!server_stats_main) return;
++
++    server_stats_count++;
++    server_stats_ns += ns;
++    for (i = 0; i < SERVER_STATS_SLOTS - 1; i++)
++        if (server_stats[i].name == name || !server_stats[i].name) break;
++    server_stats[i].name = name;
++    server_stats[i].count++;
++    server_stats[i].ns += ns;
++
++    if (!server_stats_next) server_stats_next = now + 5000000000ull;
++    if (now < server_stats_next) return;
++
++    fprintf( stderr, "server-stats: 5 s: main thread %u calls %.1f ms, all threads %d calls %.1f ms; main top:",
++             server_stats_count, server_stats_ns / 1e6,
++             (int)__atomic_exchange_n( &server_stats_all_count, 0, __ATOMIC_RELAXED ),
++             __atomic_exchange_n( &server_stats_all_ns, 0, __ATOMIC_RELAXED ) / 1e6 );
++    for (j = 0; j < 6; j++)
++    {
++        top[j] = SERVER_STATS_SLOTS;
++        for (i = 0; i < SERVER_STATS_SLOTS && server_stats[i].name; i++)
++        {
++            if (server_stats[i].count == ~0u) continue;
++            if (top[j] == SERVER_STATS_SLOTS || server_stats[i].ns > server_stats[top[j]].ns) top[j] = i;
++        }
++        if (top[j] == SERVER_STATS_SLOTS) break;
++        fprintf( stderr, " %s %u/%.1fms", server_stats[top[j]].name ? server_stats[top[j]].name : "?",
++                 server_stats[top[j]].count, server_stats[top[j]].ns / 1e6 );
++        server_stats[top[j]].count = ~0u;  /* printed */
++    }
++    fprintf( stderr, "\n" );
++    memset( server_stats, 0, sizeof(server_stats) );
++    server_stats_count = 0;
++    server_stats_ns = 0;
++    server_stats_next = now + 5000000000ull;
++}
++
+ unsigned int server_call_unlocked( void *req_ptr )
+ {
+     struct __server_request_info * const req = req_ptr;
++    unsigned long long start = 0;
+     unsigned int ret;
+ 
++    if (server_stats_on == -1)
++        server_stats_on = getenv( "WINE_SERVER_STATS" ) && atoi( getenv( "WINE_SERVER_STATS" ) );
++    if (server_stats_on) start = server_stats_now();
++
+     FTRACE_BLOCK_START("req %s", req->name)
+     TRACE_(client)("%s start\n", req->name); \
+     if (!(ret = send_request( req )))
+         ret = wait_reply( req );
+     TRACE_(client)("%s end\n", req->name);
+     FTRACE_BLOCK_END()
++
++    if (start) server_stats_add( req->name, start );
+     return ret;
+ }
+ 

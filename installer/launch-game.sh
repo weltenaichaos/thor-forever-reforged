@@ -343,11 +343,13 @@ fi
 export DXVK_LOG_PATH="Z:\\sdcard\\Download\\Thor-Forever\\INSTALLED-WOW-$n"
 # With PROFILE=on, the Thor-tuned DXVK also writes frames.csv: one line per
 # frame with its duration and what DXVK did in it, to find stutters. Other
-# DXVK builds ignore the variable.
+# DXVK builds ignore the variable. Our test Wine (WINE=test) also writes,
+# every 5 s, how often and how long threads waited on the wineserver into
+# wine.log ("server-stats" lines).
 if [ "$tf_profile" = on ]; then
-    export DXVK_FRAME_LOG="$DXVK_LOG_PATH\\frames.csv"
+    export DXVK_FRAME_LOG="$DXVK_LOG_PATH\\frames.csv" WINE_SERVER_STATS=1
 else
-    unset DXVK_FRAME_LOG
+    unset DXVK_FRAME_LOG WINE_SERVER_STATS
 fi
 tf_gpl_value=False
 [ "$tf_gpl" = on ] && tf_gpl_value=True
