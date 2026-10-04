@@ -13,7 +13,7 @@ allowed = {
     'docs/RELEASE-CHECKLIST.md', 'docs/IMPLEMENTATION-STATUS.md',
     'docs/VALIDATION.md', 'docs/RECOVERY.md',
     'docs/SOURCE-PROVENANCE.md',
-    'docs/BUILDING.md', 'docs/TUNING.md',
+    'docs/BUILDING.md', 'docs/TUNING.md', 'tools/analyze-perf.py',
     'docs/BUNDLED-RUNTIME.md', 'tools/prepare-runtime.py',
     'docs/SOURCE-DISTRIBUTION.md', 'tools/package-sources.py',
     'tools/finalize-kit.py', 'tests/test_source_packaging.py',
@@ -51,6 +51,7 @@ allowed = {
     'tests/test_discovery.py', 'tools/check-publication.py',
     'tuning.conf', 'tests/test_tuning.py',
     '.github/workflows/build-turnip.yml', '.github/workflows/build-dxvk.yml',
+    '.github/workflows/build-wine.yml', 'patches/wine-esync-deferred-close.patch',
     'patches/dxvk-2.7-arm64-toolchain.patch',
 }
 problems = []

@@ -1,0 +1,139 @@
+# Builds Wine's ntdll.so for Android (aarch64) from the same Wine fork and
+# commit as the bundled runtime, plus this repo's esync fix. Only ntdll.so
+# changes, so only that file is kept; it goes into Download/Thor-Forever/
+# wine-test/ for on-device testing. Nothing is published.
+# The build steps follow the fork's own .github/workflows/build-proton-11.0-1.yml.
+name: Build Wine
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-wine.yml'
+      - 'patches/wine-*.patch'
+
+permissions:
+  contents: read
+
+jobs:
+  wine:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        # plain = no patches from this repo, to tell build differences
+        # apart from the effect of the patches.
+        variant: [esync-fix, plain]
+    env:
+      WINE_REPO: AeroNico/proton-wine
+      # Same commit as the bundled runtime (docs/SOURCE-PROVENANCE.md).
+      WINE_REF: 52796bf615c265c23b22ae9dacc3da9e38c8487f
+    steps:
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - uses: actions/checkout@v4
+
+      - name: Fetch Wine
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.WINE_REPO }}
+          ref: ${{ env.WINE_REF }}
+          path: wine
+          submodules: recursive
+
+      - name: Install build tools
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y build-essential git wget curl unzip flex bison gettext \
+            autoconf automake libtool pkg-config mingw-w64 gcc-multilib g++-multilib \
+            libwayland-bin libfreetype6-dev libfreetype6-dev:i386 libpng-dev libpng-dev:i386 \
+            zlib1g-dev zlib1g-dev:i386 ccache
+
+      - name: Download termuxfs
+        run: |
+          mkdir -p "$HOME/termuxfs/aarch64"
+          cd "$HOME/termuxfs/aarch64"
+          wget -q https://github.com/GameNative/termux-on-gha/releases/download/build-20260218/termuxfs-aarch64.tar
+          tar -xf termuxfs-aarch64.tar
+
+      - name: Download Android NDK r27d
+        run: |
+          mkdir -p "$HOME/Android/Sdk/ndk"
+          cd "$HOME/Android/Sdk/ndk"
+          wget -q https://dl.google.com/android/repository/android-ndk-r27d-linux.zip
+          unzip -q android-ndk-r27d-linux.zip
+          mv android-ndk-r27d 27.3.13750724
+
+      - name: Download llvm-mingw
+        run: |
+          mkdir -p "$HOME/toolchains"
+          cd "$HOME/toolchains"
+          wget -q https://github.com/bylaws/llvm-mingw/releases/download/20250920/llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64.tar.xz
+          tar -xf llvm-mingw-20250920-ucrt-ubuntu-22.04-x86_64.tar.xz
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-wine-${{ env.WINE_REF }}-${{ matrix.variant }}-${{ github.sha }}
+          restore-keys: ccache-wine-${{ env.WINE_REF }}-
+
+      - name: Autogen and wine-tools
+        working-directory: wine
+        run: |
+          bash build-scripts/build-step0-autogen.sh
+          bash build-scripts/build-step0.sh
+
+      - name: Configure (applies the fork's Android patches)
+        working-directory: wine
+        run: |
+          bash build-scripts/build-step-arm64ec.sh --build-sysvshm
+          bash build-scripts/build-step-arm64ec.sh --enable-16kb-pages --configure
+
+      - name: Apply this repo's Wine patches
+        if: matrix.variant == 'esync-fix'
+        working-directory: wine
+        run: |
+          for patch in "$GITHUB_WORKSPACE"/patches/wine-*.patch; do
+            git apply --verbose "$patch"
+          done
+
+      - name: Build
+        working-directory: wine
+        run: bash build-scripts/build-step-arm64ec.sh --enable-16kb-pages --build
+
+      - name: Package ntdll.so and ntdll.dll
+        working-directory: wine
+        run: |
+          so=dlls/ntdll/ntdll.so
+          [ -f "$so" ] || so=$(find . -path '*aarch64-unix*' -name ntdll.so -type f | head -n 1)
+          [ -n "$so" ] || { echo 'ntdll.so not found'; exit 1; }
+          mkdir "$GITHUB_WORKSPACE/out"
+          "$HOME/Android/Sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
+            -o "$GITHUB_WORKSPACE/out/ntdll.so" "$so"
+          strings "$GITHUB_WORKSPACE/out/ntdll.so" | grep -q 'Wait-any polling on fd' ||
+            { echo 'built ntdll.so has no esync'; exit 1; }
+          # The Windows half of ntdll must come from the same build.
+          dll=$(find . -path '*aarch64-windows*' -name ntdll.dll -type f | head -n 1)
+          [ -n "$dll" ] || { echo 'aarch64-windows ntdll.dll not found'; exit 1; }
+          cp "$dll" "$GITHUB_WORKSPACE/out/ntdll.dll"
+          {
+            echo "wine_repo=$WINE_REPO"
+            echo "wine_ref=$WINE_REF"
+            echo "repo_commit=$GITHUB_SHA"
+            echo "built_from=$so $dll"
+            echo "variant=${{ matrix.variant }}"
+            [ "${{ matrix.variant }}" = plain ] ||
+              echo "patches=$(cd "$GITHUB_WORKSPACE/patches" && ls wine-*.patch | tr '\n' ' ')"
+          } > "$GITHUB_WORKSPACE/out/BUILD-INFO.txt"
+          cd "$GITHUB_WORKSPACE/out" && sha256sum ntdll.so ntdll.dll > SHA256SUMS.txt
+          cat BUILD-INFO.txt SHA256SUMS.txt
+          file ntdll.so ntdll.dll
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wine-ntdll-${{ matrix.variant }}
+          path: out/
