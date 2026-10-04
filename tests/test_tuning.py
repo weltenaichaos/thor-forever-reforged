@@ -16,6 +16,7 @@ SWAP = re.search(r'^tf_sha256\(\)\n.*?^}\n', LAUNCHER, re.M | re.S).group(0) + r
     r'^# DXVK=test puts.*?^if \[ "\$tf_dxvk" = installed \].*?^fi\n', LAUNCHER, re.M | re.S).group(0)
 WINE_SWAP = re.search(r'^tf_sha256\(\)\n.*?^}\n', LAUNCHER, re.M | re.S).group(0) + re.search(
     r'^# WINE=test swaps in.*?^print -r -- "WINE_NTDLL_SHA256=\$tf_hash"\n', LAUNCHER, re.M | re.S).group(0)
+ENTRY_CLEANUP = re.search(r'^# Each launch leaves ENTRY.*?^esac\n', LAUNCHER, re.M | re.S).group(0)
 DEFAULTS = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=off DRIVER=installed SHADER_CACHE=on DXVK=installed DXVK_TILER=auto PROFILE=off AFFINITY=all TURNIP_MODE=auto WINE=installed'
 SHIPPED = 'TUNING FPS_CAP=60 HUD=fps,frametimes,compiler LOGS=off GPL=off ESYNC=on DRIVER=test SHADER_CACHE=on DXVK=test DXVK_TILER=off PROFILE=off AFFINITY=all TURNIP_MODE=auto WINE=installed'
 
@@ -143,6 +144,29 @@ class WineSwapTests(unittest.TestCase):
         self.assertIn('DONE', self.swap('installed').stdout)
         self.assertEqual((self.unix / 'ntdll.so').read_text(), 'installed ntdll')
         self.assertFalse((self.unix / 'ntdll.so.installed').exists())
+
+class EntryCleanupTests(unittest.TestCase):
+    NAMES = ['ENTRY-1-5.log', 'ENTRY-1-5.started', 'ENTRY-1-5.done', 'ENTRY-2-7.log', 'ENTRY-2-7.started',
+             'ENTRY-3-9.tmp', 'ENTRY-4-1.log', 'ENTRY-4-1.started', 'tuning.conf', 'ENTRY-notes.txt']
+
+    def run_cleanup(self, token):
+        with tempfile.TemporaryDirectory(prefix='thor-entry-') as directory:
+            for name in self.NAMES:
+                (Path(directory) / name).write_text('x')
+            env = {'KIT': directory, 'PATH': '/usr/bin:/bin'}
+            if token is not None:
+                env['TF_ENTRY_TOKEN'] = token
+            subprocess.run([SHELL, 'sh', '-c', ENTRY_CLEANUP], check=True, env=env)
+            return sorted(path.name for path in Path(directory).iterdir())
+
+    def test_keeps_only_this_launch_and_unrelated_files(self):
+        self.assertEqual(self.run_cleanup('4-1'), ['ENTRY-3-9.tmp', 'ENTRY-4-1.log', 'ENTRY-4-1.started',
+                                                   'ENTRY-notes.txt', 'tuning.conf'])
+
+    def test_without_a_valid_token_nothing_is_removed(self):
+        for token in (None, '', '../x', '*'):
+            self.assertEqual(self.run_cleanup(token), sorted(self.NAMES))
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -104,6 +104,21 @@ cleanup_lock()
 trap cleanup_lock EXIT
 trap 'exit 130' INT TERM HUP
 
+# Each launch leaves ENTRY-<token>.log/.started/.done in the kit folder: the
+# handshake Thor-Forever.exe waits on. Holding the lock means every earlier
+# launch has ended, so only this launch's set is kept. .tmp files are left
+# alone because a finishing launch renames its .tmp into .done.
+case "${TF_ENTRY_TOKEN-}" in
+    ''|*[!0-9-]*) ;;
+    *)
+        for tf_entry in "$KIT"/ENTRY-*.log "$KIT"/ENTRY-*.started "$KIT"/ENTRY-*.done; do
+            [ -f "$tf_entry" ] && [ ! -L "$tf_entry" ] || continue
+            case "${tf_entry##*/}" in "ENTRY-$TF_ENTRY_TOKEN".*) continue ;; esac
+            rm -f "$tf_entry"
+        done
+        ;;
+esac
+
 # Performance settings from $KIT/tuning.conf. Only known keys with
 # validated values are accepted; the file is never executed.
 tf_fps=60 tf_hud=fps,frametimes,compiler tf_logs=off tf_gpl=off tf_esync=off
