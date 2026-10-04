@@ -371,9 +371,42 @@ cd "$GAME" || exit 18
 # WoW and wineserver thread, how much WoW has read from storage, how many
 # files each has open, every core's clock and the GPU load into perf.csv.
 # It only reads /proc and /sys with shell builtins.
+# Prints "k,<kind>,<count>" for the open fds of process $1 (for example
+# eventfd or sync_file), from the link targets toybox ls shows.
+tf_fd_kinds()
+{
+    tf_ke=0 tf_ks=0 tf_kd=0 tf_ka=0 tf_ko= tf_kn=0 tf_kp=0 tf_kg=0 tf_kv=0 tf_kf=0
+    /system/bin/toybox ls -l "$1/fd/" >"$OUT/.fds" 2>/dev/null </dev/null || return
+    while IFS= read -r tf_l; do
+        case "$tf_l" in *' -> '*) ;; *) continue ;; esac
+        case "${tf_l##* -> }" in
+            *eventfd*) tf_ke=$((tf_ke + 1)) ;;
+            *sync_file*) tf_ks=$((tf_ks + 1)) ;;
+            *dmabuf*|/dmabuf*) tf_kd=$((tf_kd + 1)) ;;
+            anon_inode:*) tf_ka=$((tf_ka + 1)); tf_ko=${tf_l##* -> } ;;
+            socket:*) tf_kn=$((tf_kn + 1)) ;;
+            pipe:*) tf_kp=$((tf_kp + 1)) ;;
+            /dev/kgsl*) tf_kg=$((tf_kg + 1)) ;;
+            /dev/*) tf_kv=$((tf_kv + 1)) ;;
+            *) tf_kf=$((tf_kf + 1)) ;;
+        esac
+    done <"$OUT/.fds"
+    rm -f "$OUT/.fds"
+    print -r -- "k,eventfd,$tf_ke"
+    print -r -- "k,sync_file,$tf_ks"
+    print -r -- "k,dmabuf,$tf_kd"
+    print -r -- "k,other_anon(${tf_ko//[!A-Za-z0-9_:.]/_}),$tf_ka"
+    print -r -- "k,socket,$tf_kn"
+    print -r -- "k,pipe,$tf_kp"
+    print -r -- "k,kgsl,$tf_kg"
+    print -r -- "k,other_dev,$tf_kv"
+    print -r -- "k,file,$tf_kf"
+}
 tf_profile_loop()
 {
+    tf_tick=0
     while [ -e "$OUT/.profiling" ]; do
+        tf_tick=$((tf_tick + 1))
         read -r tf_up _ </proc/uptime || tf_up=0
         print -r -- "T,$tf_up"
         for tf_c in /sys/devices/system/cpu/cpu[0-9]*; do
@@ -396,6 +429,9 @@ tf_profile_loop()
             # Open files (fds), to see a leak filling the fd table.
             set -- "$tf_p"/fd/*
             [ "$1" != "$tf_p/fd/*" ] && print -r -- "n,$tf_n,${tf_p##*/},$#"
+            # Every 30 s while WoW has many open, count them by kind.
+            [ "$tf_n" = WowB-ARM64.exe ] && [ "$#" -gt 1000 ] && [ $((tf_tick % 15)) = 0 ] &&
+                tf_fd_kinds "$tf_p"
             # Bytes WoW has read so far, to see loading bursts.
             if [ "$tf_n" = WowB-ARM64.exe ]; then
                 tf_rc= tf_rb=

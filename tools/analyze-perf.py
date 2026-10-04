@@ -15,7 +15,7 @@ def main(path, start=None, end=None):
     for line in open(path, encoding='utf-8', errors='replace'):
         parts = line.rstrip('\n').split(',')
         if parts[0] == 'T' and len(parts) == 2:
-            current = {'t': float(parts[1]), 'f': {}, 'g': None, 'l': None, 'th': {}, 'io': None, 'fds': {}}
+            current = {'t': float(parts[1]), 'f': {}, 'g': None, 'l': None, 'th': {}, 'io': None, 'fds': {}, 'kinds': {}}
             samples.append(current)
         elif current is None:
             continue
@@ -30,6 +30,8 @@ def main(path, start=None, end=None):
             current['io'] = int(parts[2])
         elif parts[0] == 'n' and len(parts) == 4 and parts[3].isdigit():
             current['fds'][parts[1]] = int(parts[3])
+        elif parts[0] == 'k' and len(parts) == 3 and parts[2].isdigit():
+            current['kinds'][parts[1]] = int(parts[2])
         elif parts[0] == 't' and len(parts) == 7:
             proc, tid, name, utime, stime, cpu = parts[1:]
             current['th'][(proc, tid)] = (name, int(utime) + int(stime), int(cpu))
@@ -109,6 +111,11 @@ def main(path, start=None, end=None):
             peak = max(counts, key=lambda c: c[1])
             print(f'\n{name} open fds: {counts[0][1]} at start, {counts[-1][1]} at end, '
                   f'peak {peak[1]} at {peak[0]:.0f}s')
+    kinds = [(s['t'] - t0, s['kinds']) for s in picked if s['kinds']]
+    if kinds:
+        print('WoW open fds by kind (logged every 30 s above 1000 fds):')
+        for t, k in kinds:
+            print(f'  {t:5.0f}s  ' + ', '.join(f'{n} {c}' for n, c in sorted(k.items(), key=lambda kv: -kv[1]) if c))
 
 
 if __name__ == '__main__':
