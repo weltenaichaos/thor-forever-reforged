@@ -191,23 +191,32 @@ class EntryCleanupTests(unittest.TestCase):
     NAMES = ['ENTRY-1-5.log', 'ENTRY-1-5.started', 'ENTRY-1-5.done', 'ENTRY-2-7.log', 'ENTRY-2-7.started',
              'ENTRY-3-9.tmp', 'ENTRY-4-1.log', 'ENTRY-4-1.started', 'tuning.conf', 'ENTRY-notes.txt']
 
+    LEGACY = ['ENTRY-0-1.log', 'ENTRY-0-1.done', 'ENTRY-4-1.log', 'ENTRY-old.txt', 'tuning.conf']
+
     def run_cleanup(self, token):
         with tempfile.TemporaryDirectory(prefix='thor-entry-') as directory:
+            logs = Path(directory) / 'logs'
+            logs.mkdir()
             for name in self.NAMES:
+                (logs / name).write_text('x')
+            for name in self.LEGACY:
                 (Path(directory) / name).write_text('x')
-            env = {'KIT': directory, 'PATH': '/usr/bin:/bin'}
+            env = {'KIT': directory, 'LOGS': str(logs), 'PATH': '/usr/bin:/bin'}
             if token is not None:
                 env['TF_ENTRY_TOKEN'] = token
             subprocess.run([SHELL, 'sh', '-c', ENTRY_CLEANUP], check=True, env=env)
-            return sorted(path.name for path in Path(directory).iterdir())
+            return (sorted(path.name for path in logs.iterdir()),
+                    sorted(path.name for path in Path(directory).iterdir() if path != logs))
 
     def test_keeps_only_this_launch_and_unrelated_files(self):
-        self.assertEqual(self.run_cleanup('4-1'), ['ENTRY-3-9.tmp', 'ENTRY-4-1.log', 'ENTRY-4-1.started',
-                                                   'ENTRY-notes.txt', 'tuning.conf'])
+        # Sets older versions left in the kit folder go, even this token's.
+        self.assertEqual(self.run_cleanup('4-1'), (
+            ['ENTRY-3-9.tmp', 'ENTRY-4-1.log', 'ENTRY-4-1.started', 'ENTRY-notes.txt', 'tuning.conf'],
+            ['ENTRY-old.txt', 'tuning.conf']))
 
     def test_without_a_valid_token_nothing_is_removed(self):
         for token in (None, '', '../x', '*'):
-            self.assertEqual(self.run_cleanup(token), sorted(self.NAMES))
+            self.assertEqual(self.run_cleanup(token), (sorted(self.NAMES), sorted(self.LEGACY)))
 
 
 if __name__ == '__main__':

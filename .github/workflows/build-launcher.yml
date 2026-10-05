@@ -1,0 +1,43 @@
+# Builds Thor-Forever.exe, the Windows ARM64 start screen and launcher, from
+# src/launcher.c. Nothing is published; each build is a downloadable
+# workflow artifact.
+name: Build launcher
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-launcher.yml'
+      - 'src/launcher.c'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    env:
+      LLVM_MINGW: llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download llvm-mingw
+        run: |
+          curl -fsSL -o llvm-mingw.tar.xz \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/${LLVM_MINGW}.tar.xz"
+          tar -xf llvm-mingw.tar.xz
+          echo "$PWD/${LLVM_MINGW}/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: |
+          mkdir out
+          aarch64-w64-mingw32-clang -O2 -Wall -Wextra -Werror -municode -mwindows \
+            src/launcher.c -o out/Thor-Forever.exe -luser32 -lgdi32
+          (cd out && sha256sum Thor-Forever.exe > SHA256SUMS.txt)
+          cat out/SHA256SUMS.txt
+          file out/Thor-Forever.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: thor-forever-launcher-arm64
+          path: out/

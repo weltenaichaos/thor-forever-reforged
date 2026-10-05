@@ -36,7 +36,15 @@ is not read-only. Never point Battle.net or an updater at this separate layout.
 
 ## Play and save your settings
 
-1. From the container desktop, open **Thor-Forever.exe**.
+1. From the container desktop, open **Thor-Forever.exe**. Its start screen
+   shows your installed game version and has these buttons:
+   - **Play** starts the game.
+   - **Update with Battle.net** opens Battle.net. Press Update there if it
+     offers one, close Battle.net when it's done, then press **Play**. The
+     launcher copies the updated game files over by itself.
+   - **FPS cap**, **Overlay** and **Measuring** change those settings in
+     `tuning.conf`. Each tap moves to the next value.
+   - **Quit** closes the start screen without playing.
 2. Log in yourself, choose your controls and play briefly.
 3. Exit through **WoW's menu > Exit Game**, then reopen the launcher and check
    that your controls/settings remain selected.
