@@ -276,6 +276,40 @@ static void next_setting(HWND window, struct setting *s)
     show_setting(s);
 }
 
+/* Battle.net and its helpers keep running in the background after its
+ * window is closed. Ends them before the game starts, the same as closing
+ * the container after updating. */
+static void close_battle_net(void)
+{
+    static const wchar_t *const names[] = {
+        L"Battle.net.exe", L"Battle.net Launcher.exe", L"Battle.net Helper.exe",
+        L"Agent.exe", L"BlizzardError.exe"
+    };
+    HANDLE procs[64];
+    PROCESSENTRY32W entry;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    int count = 0, i;
+    size_t n;
+    if (snap == INVALID_HANDLE_VALUE) return;
+    entry.dwSize = sizeof(entry);
+    if (Process32FirstW(snap, &entry)) {
+        do {
+            for (n = 0; n < sizeof(names) / sizeof(*names); ++n) {
+                HANDLE proc;
+                if (_wcsicmp(entry.szExeFile, names[n]) || count >= 64) continue;
+                proc = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, entry.th32ProcessID);
+                if (proc && TerminateProcess(proc, 0)) procs[count++] = proc;
+                else if (proc) CloseHandle(proc);
+            }
+        } while (Process32NextW(snap, &entry));
+    }
+    CloseHandle(snap);
+    for (i = 0; i < count; ++i) {
+        WaitForSingleObject(procs[i], 5000);
+        CloseHandle(procs[i]);
+    }
+}
+
 static void refresh(void)
 {
     wchar_t version[64], text[128];
@@ -311,9 +345,10 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
         case IDOK:
             if (battle_net_open() &&
                 MessageBoxW(window, L"Battle.net is still open. If it is updating the game, "
-                            L"starting now can break the update.\n\nStart anyway?",
+                            L"starting now breaks the update.\n\nClose Battle.net and start the game?",
                             L"Thor Forever", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
                 return 0;
+            close_battle_net();
             DestroyWindow(window);
             PostQuitMessage(ID_PLAY);
             return 0;
