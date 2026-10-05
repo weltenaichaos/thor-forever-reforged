@@ -129,16 +129,19 @@ for tf_run in "$LOGS"/run-*; do
     /system/bin/toybox rm -rf "$tf_run" >/dev/null 2>&1 </dev/null
 done
 
-# Each launch leaves ENTRY-<token>.log/.started/.done in the kit folder: the
+# Each launch leaves ENTRY-<token>.log/.started/.done in logs/: the
 # handshake Thor-Forever.exe waits on. Holding the lock means every earlier
 # launch has ended, so only this launch's set is kept. .tmp files are left
-# alone because a finishing launch renames its .tmp into .done.
+# alone because a finishing launch renames its .tmp into .done. Sets that
+# older versions left in the kit folder itself are removed as well.
 case "${TF_ENTRY_TOKEN-}" in
     ''|*[!0-9-]*) ;;
     *)
-        for tf_entry in "$KIT"/ENTRY-*.log "$KIT"/ENTRY-*.started "$KIT"/ENTRY-*.done; do
+        for tf_entry in "$LOGS"/ENTRY-*.log "$LOGS"/ENTRY-*.started "$LOGS"/ENTRY-*.done \
+            "$KIT"/ENTRY-*.log "$KIT"/ENTRY-*.started "$KIT"/ENTRY-*.done; do
             [ -f "$tf_entry" ] && [ ! -L "$tf_entry" ] || continue
-            case "${tf_entry##*/}" in "ENTRY-$TF_ENTRY_TOKEN".*) continue ;; esac
+            [ "$tf_entry" = "$LOGS/${tf_entry##*/}" ] &&
+                case "${tf_entry##*/}" in "ENTRY-$TF_ENTRY_TOKEN".*) continue ;; esac
             rm -f "$tf_entry"
         done
         ;;

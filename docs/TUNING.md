@@ -6,6 +6,10 @@ showed in the starter area, in crowds and in the main hub, so treat it as a
 rough range, not a benchmark. Where the frame time goes, and how to
 measure it, is in [PERFORMANCE.md](PERFORMANCE.md).
 
+FPS_CAP, HUD and PROFILE can also be changed on the start screen of
+Thor-Forever.exe (the FPS cap, Overlay and Measuring buttons). It rewrites
+only those lines in `tuning.conf`.
+
 ## Recommended profile
 
 This is what the shipped `tuning.conf` sets:
