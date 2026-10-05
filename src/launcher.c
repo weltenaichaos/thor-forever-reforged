@@ -482,38 +482,96 @@ static void write_diag(HANDLE starter, const wchar_t *command)
     CloseHandle(file);
 }
 
-/* Starts the game bridge and waits for it, as GameHub tracks this process. */
-static int run_game(void)
+/* The game bridge: installer/entry.sh, started through start.exe /unix.
+ * Once Battle.net has run in the GameHub session, GameHub no longer starts
+ * it (start.exe returns 0 but the script never runs). So when entry.sh
+ * supports it, the bridge is started in "wait" mode as soon as the start
+ * screen opens, and Play only tells it to go on. */
+static wchar_t bridge_token[80], bridge_command[1024];
+static HANDLE bridge_starter;
+static int bridge_waiting;
+
+static void entry_path(wchar_t *out, const wchar_t *token, const wchar_t *suffix)
 {
-    wchar_t start[MAX_PATH], command[1024], token[80], begun[512], done[512];
-    wchar_t old_begun[512], old_done[512];
+    swprintf(out, 512, L"%ls\\logs\\ENTRY-%ls.%ls", KIT, token, suffix);
+}
+
+static int touch(const wchar_t *path)
+{
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return 0;
+    CloseHandle(file);
+    return 1;
+}
+
+static int start_bridge(int wait)
+{
+    wchar_t start[MAX_PATH];
     STARTUPINFOW si = {0};
     PROCESS_INFORMATION pi = {0};
-    DWORD length, count;
+    DWORD length = GetSystemDirectoryW(start, MAX_PATH);
+    si.cb = sizeof(si);
+    if (!length || length + 11 >= MAX_PATH) return 0;
+    wcscat(start, L"\\start.exe");
+    CreateDirectoryW(KIT L"\\logs", NULL);
+    swprintf(bridge_token, 80, L"%lu-%llu", GetCurrentProcessId(), GetTickCount64());
+    swprintf(bridge_command, 1024, L"\"%ls\" /unix /system/bin/sh /sdcard/Download/Thor-Forever/installer/entry.sh %ls%ls",
+             start, bridge_token, wait ? L" wait" : L"");
+    if (!CreateProcessW(start, bridge_command, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return 0;
+    CloseHandle(pi.hThread);
+    if (bridge_starter) CloseHandle(bridge_starter);
+    bridge_starter = pi.hProcess;
+    return 1;
+}
+
+/* Starts the waiting bridge if this entry.sh supports it. */
+static void prepare_bridge(void)
+{
+    static char script[8192];
+    if (!read_text(KIT L"\\installer\\entry.sh", script, sizeof(script))) return;
+    if (!strstr(script, "TF_WAIT_FOR_PLAY")) return;
+    bridge_waiting = start_bridge(1);
+}
+
+/* Tells a waiting bridge to end, for Quit. */
+static void cancel_bridge(void)
+{
+    wchar_t path[512];
+    if (!bridge_waiting) return;
+    entry_path(path, bridge_token, L"quit");
+    touch(path);
+}
+
+/* Starts the game and waits for it, as GameHub tracks this process. */
+static int run_game(void)
+{
+    wchar_t begun[512], done[512], ready[512], go[512], old_begun[512], old_done[512];
+    DWORD count;
     ULONGLONG deadline;
     HANDLE result;
     char buffer[32] = {0};
     char *end;
     unsigned long parsed;
-    si.cb = sizeof(si);
-    length = GetSystemDirectoryW(start, MAX_PATH);
-    if (!length || length + 11 >= MAX_PATH) return 3;
-    wcscat(start, L"\\start.exe");
-    CreateDirectoryW(KIT L"\\logs", NULL);
-    swprintf(token, 80, L"%lu-%llu", GetCurrentProcessId(), GetTickCount64());
-    swprintf(begun, 512, L"%ls\\logs\\ENTRY-%ls.started", KIT, token);
-    swprintf(done, 512, L"%ls\\logs\\ENTRY-%ls.done", KIT, token);
-    /* installer/entry.sh from before the start screen writes these files
-     * into the kit folder itself; accept that too. */
-    swprintf(old_begun, 512, L"%ls\\ENTRY-%ls.started", KIT, token);
-    swprintf(old_done, 512, L"%ls\\ENTRY-%ls.done", KIT, token);
-    if (GetFileAttributesW(begun) != INVALID_FILE_ATTRIBUTES || GetFileAttributesW(done) != INVALID_FILE_ATTRIBUTES) return 4;
-    swprintf(command, 1024, L"\"%ls\" /unix /system/bin/sh /sdcard/Download/Thor-Forever/installer/entry.sh %ls", start, token);
-    if (!CreateProcessW(start, command, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
+    int started = 0;
+    if (bridge_waiting) {
+        entry_path(ready, bridge_token, L"ready");
+        entry_path(go, bridge_token, L"go");
+        /* The waiting bridge may still be starting up. */
+        deadline = GetTickCount64() + 20000;
+        while (GetFileAttributesW(ready) == INVALID_FILE_ATTRIBUTES && GetTickCount64() < deadline) Sleep(250);
+        if (GetFileAttributesW(ready) != INVALID_FILE_ATTRIBUTES && touch(go)) started = 1;
+        else cancel_bridge();
+    }
+    if (!started && !start_bridge(0)) {
         MessageBoxW(NULL, L"Could not start Thor Forever.", L"Thor Forever", MB_OK | MB_ICONERROR);
         return 5;
     }
-    CloseHandle(pi.hThread);
+    entry_path(begun, bridge_token, L"started");
+    entry_path(done, bridge_token, L"done");
+    /* installer/entry.sh from before the start screen writes these files
+     * into the kit folder itself; accept that too. */
+    swprintf(old_begun, 512, L"%ls\\ENTRY-%ls.started", KIT, bridge_token);
+    swprintf(old_done, 512, L"%ls\\ENTRY-%ls.done", KIT, bridge_token);
     /* start.exe exit is not game exit; use the bridge's completion handshake. */
     deadline = GetTickCount64() + 60000;
     while (GetFileAttributesW(begun) == INVALID_FILE_ATTRIBUTES) {
@@ -522,14 +580,13 @@ static int run_game(void)
             break;
         }
         if (GetTickCount64() >= deadline) {
-            write_diag(pi.hProcess, command);
-            CloseHandle(pi.hProcess);
-            MessageBoxW(NULL, L"The launch bridge did not respond within 60 seconds. Keep the logs for diagnosis. Do not repeatedly launch it.", L"Thor Forever", MB_OK | MB_ICONERROR);
+            write_diag(bridge_starter, bridge_command);
+            MessageBoxW(NULL, L"The game did not start. Close Thor Forever, start it again from GameHub and press Play.\n\n"
+                        L"Details are in logs\\launch-diag.txt.", L"Thor Forever", MB_OK | MB_ICONERROR);
             return 6;
         }
         Sleep(250);
     }
-    CloseHandle(pi.hProcess);
     while (GetFileAttributesW(done) == INVALID_FILE_ATTRIBUTES) Sleep(500);
     result = CreateFileW(done, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (result == INVALID_HANDLE_VALUE) return 7;
@@ -551,6 +608,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR args, int show
         MessageBoxW(NULL, L"Required files are missing. Extract the complete package into Download/Thor-Forever.", L"Thor Forever", MB_OK | MB_ICONERROR);
         return 2;
     }
-    if (show_menu(instance) != ID_PLAY) return 0;
+    prepare_bridge();
+    if (show_menu(instance) != ID_PLAY) {
+        cancel_bridge();
+        return 0;
+    }
     return run_game();
 }
