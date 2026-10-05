@@ -9,6 +9,7 @@
 #include <wchar.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 /* SPDX-License-Identifier: MIT
  * Start screen for Thor Forever: shows the installed game version, opens
@@ -415,6 +416,37 @@ static int show_menu(HINSTANCE instance)
     return (int)msg.wParam;
 }
 
+/* When the bridge does not start, records what start.exe returned and which
+ * processes run, into logs\\launch-diag.txt, to find out what blocks it. */
+static void write_diag(HANDLE starter, const wchar_t *command)
+{
+    PROCESSENTRY32W entry;
+    HANDLE snap, file;
+    DWORD code = 0, written;
+    char line[600];
+    int n;
+    file = CreateFileW(KIT L"\\logs\\launch-diag.txt", GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                       CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) return;
+    if (!GetExitCodeProcess(starter, &code)) code = 0xffffffff;
+    n = snprintf(line, sizeof(line), "command: %ls\r\nstart.exe exit code: %lu%s\r\nprocesses:\r\n",
+                 command, (unsigned long)code, code == STILL_ACTIVE ? " (still running)" : "");
+    if (n > 0) WriteFile(file, line, (DWORD)strlen(line), &written, NULL);
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap != INVALID_HANDLE_VALUE) {
+        entry.dwSize = sizeof(entry);
+        if (Process32FirstW(snap, &entry)) {
+            do {
+                n = snprintf(line, sizeof(line), "  %lu %ls (parent %lu)\r\n", (unsigned long)entry.th32ProcessID,
+                             entry.szExeFile, (unsigned long)entry.th32ParentProcessID);
+                if (n > 0) WriteFile(file, line, (DWORD)strlen(line), &written, NULL);
+            } while (Process32NextW(snap, &entry));
+        }
+        CloseHandle(snap);
+    }
+    CloseHandle(file);
+}
+
 /* Starts the game bridge and waits for it, as GameHub tracks this process. */
 static int run_game(void)
 {
@@ -447,7 +479,6 @@ static int run_game(void)
         return 5;
     }
     CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
     /* start.exe exit is not game exit; use the bridge's completion handshake. */
     deadline = GetTickCount64() + 60000;
     while (GetFileAttributesW(begun) == INVALID_FILE_ATTRIBUTES) {
@@ -456,11 +487,14 @@ static int run_game(void)
             break;
         }
         if (GetTickCount64() >= deadline) {
+            write_diag(pi.hProcess, command);
+            CloseHandle(pi.hProcess);
             MessageBoxW(NULL, L"The launch bridge did not respond within 60 seconds. Keep the logs for diagnosis. Do not repeatedly launch it.", L"Thor Forever", MB_OK | MB_ICONERROR);
             return 6;
         }
         Sleep(250);
     }
+    CloseHandle(pi.hProcess);
     while (GetFileAttributesW(done) == INVALID_FILE_ATTRIBUTES) Sleep(500);
     result = CreateFileW(done, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (result == INVALID_HANDLE_VALUE) return 7;
