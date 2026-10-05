@@ -127,20 +127,40 @@ static int read_installed_version(wchar_t *out, size_t size)
     return 0;
 }
 
-static int process_running(const wchar_t *name)
+/* Battle.net often keeps running in the tray after its window is closed, so
+ * it counts as open only while one of its windows is visible. */
+static DWORD bnet_pids[32];
+static int bnet_count, bnet_visible;
+
+static BOOL CALLBACK find_bnet_window(HWND window, LPARAM unused)
+{
+    DWORD pid = 0;
+    int i;
+    (void)unused;
+    if (!IsWindowVisible(window)) return TRUE;
+    GetWindowThreadProcessId(window, &pid);
+    for (i = 0; i < bnet_count; ++i)
+        if (bnet_pids[i] == pid) { bnet_visible = 1; return FALSE; }
+    return TRUE;
+}
+
+static int battle_net_open(void)
 {
     PROCESSENTRY32W entry;
     HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    int found = 0;
+    bnet_count = 0;
+    bnet_visible = 0;
     if (snap == INVALID_HANDLE_VALUE) return 0;
     entry.dwSize = sizeof(entry);
     if (Process32FirstW(snap, &entry)) {
         do {
-            if (!_wcsicmp(entry.szExeFile, name)) { found = 1; break; }
+            if (!_wcsicmp(entry.szExeFile, L"Battle.net.exe") && bnet_count < 32)
+                bnet_pids[bnet_count++] = entry.th32ProcessID;
         } while (Process32NextW(snap, &entry));
     }
     CloseHandle(snap);
-    return found;
+    if (bnet_count) EnumWindows(find_bnet_window, 0);
+    return bnet_visible;
 }
 
 static int start_battle_net(void)
@@ -263,7 +283,7 @@ static void refresh(void)
     else
         wcscpy(text, L"Installed game version: not found");
     SetWindowTextW(version_text, text);
-    if (process_running(L"Battle.net.exe"))
+    if (battle_net_open())
         SetWindowTextW(status_text, L"Battle.net is open. Press Update there if it offers one. "
                                     L"When it's done, close Battle.net and press Play.");
     else if (bnet_started)
@@ -288,7 +308,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
         switch (LOWORD(wparam)) {
         case ID_PLAY:
         case IDOK:
-            if (process_running(L"Battle.net.exe") &&
+            if (battle_net_open() &&
                 MessageBoxW(window, L"Battle.net is still open. If it is updating the game, "
                             L"starting now can break the update.\n\nStart anyway?",
                             L"Thor Forever", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES)
@@ -297,7 +317,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
             PostQuitMessage(ID_PLAY);
             return 0;
         case ID_UPDATE:
-            if (process_running(L"Battle.net.exe")) {
+            if (battle_net_open()) {
                 SetWindowTextW(status_text, L"Battle.net is already open.");
             } else if (start_battle_net()) {
                 bnet_started = 1;
@@ -399,6 +419,7 @@ static int show_menu(HINSTANCE instance)
 static int run_game(void)
 {
     wchar_t start[MAX_PATH], command[1024], token[80], begun[512], done[512];
+    wchar_t old_begun[512], old_done[512];
     STARTUPINFOW si = {0};
     PROCESS_INFORMATION pi = {0};
     DWORD length, count;
@@ -415,6 +436,10 @@ static int run_game(void)
     swprintf(token, 80, L"%lu-%llu", GetCurrentProcessId(), GetTickCount64());
     swprintf(begun, 512, L"%ls\\logs\\ENTRY-%ls.started", KIT, token);
     swprintf(done, 512, L"%ls\\logs\\ENTRY-%ls.done", KIT, token);
+    /* installer/entry.sh from before the start screen writes these files
+     * into the kit folder itself; accept that too. */
+    swprintf(old_begun, 512, L"%ls\\ENTRY-%ls.started", KIT, token);
+    swprintf(old_done, 512, L"%ls\\ENTRY-%ls.done", KIT, token);
     if (GetFileAttributesW(begun) != INVALID_FILE_ATTRIBUTES || GetFileAttributesW(done) != INVALID_FILE_ATTRIBUTES) return 4;
     swprintf(command, 1024, L"\"%ls\" /unix /system/bin/sh /sdcard/Download/Thor-Forever/installer/entry.sh %ls", start, token);
     if (!CreateProcessW(start, command, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
@@ -426,6 +451,10 @@ static int run_game(void)
     /* start.exe exit is not game exit; use the bridge's completion handshake. */
     deadline = GetTickCount64() + 60000;
     while (GetFileAttributesW(begun) == INVALID_FILE_ATTRIBUTES) {
+        if (GetFileAttributesW(old_begun) != INVALID_FILE_ATTRIBUTES) {
+            wcscpy(done, old_done);
+            break;
+        }
         if (GetTickCount64() >= deadline) {
             MessageBoxW(NULL, L"The launch bridge did not respond within 60 seconds. Keep the logs for diagnosis. Do not repeatedly launch it.", L"Thor Forever", MB_OK | MB_ICONERROR);
             return 6;
