@@ -13,13 +13,26 @@ DRIVER="$ROOT/driver"
 PREFIX="$ROOT/prefix"
 STAGE="$ROOT/game"
 GAME="$STAGE/_classic_beta_"
-n=1
-while [ "$n" -le 10000 ]; do
-    OUT="$KIT/INSTALLED-WOW-$n"
+# Each launch logs into its own Download/Thor-Forever/logs/run-<n> folder,
+# numbered one above the newest existing one. Only the newest TF_KEEP_RUNS
+# folders are kept; older ones are deleted once this launch holds the lock.
+LOGS="$KIT/logs"
+TF_KEEP_RUNS=3
+[ -d "$LOGS" ] && [ ! -L "$LOGS" ] || { [ ! -e "$LOGS" ] && mkdir "$LOGS"; } || exit 2
+n=0
+for tf_run in "$LOGS"/run-*; do
+    tf_rn=${tf_run##*/run-}
+    case "$tf_rn" in ''|*[!0-9]*) continue ;; esac
+    [ "${#tf_rn}" -le 9 ] && [ "$tf_rn" -gt "$n" ] && n=$tf_rn
+done
+n=$((n + 1))
+tf_end=$((n + 100))
+while [ "$n" -le "$tf_end" ]; do
+    OUT="$LOGS/run-$n"
     if mkdir "$OUT" 2>/dev/null; then break; fi
     n=$((n + 1))
 done
-[ "$n" -le 10000 ] || exit 2
+[ "$n" -le "$tf_end" ] || exit 2
 exec >"$OUT/result.txt" 2>&1 </dev/null
 tf_stage=preflight
 trap 'tf_status=$?; print -r -- "SCRIPT_EXIT=$tf_status STAGE=$tf_stage"' EXIT
@@ -105,6 +118,16 @@ cleanup_lock()
 }
 trap cleanup_lock EXIT
 trap 'exit 130' INT TERM HUP
+
+# Holding the lock means every earlier launch has ended, so their log folders
+# are closed: delete all but the newest TF_KEEP_RUNS.
+for tf_run in "$LOGS"/run-*; do
+    tf_rn=${tf_run##*/run-}
+    case "$tf_rn" in ''|*[!0-9]*) continue ;; esac
+    [ "${#tf_rn}" -le 9 ] && [ "$tf_rn" -le $((n - TF_KEEP_RUNS)) ] || continue
+    [ -d "$tf_run" ] && [ ! -L "$tf_run" ] || continue
+    /system/bin/toybox rm -rf "$tf_run" >/dev/null 2>&1 </dev/null
+done
 
 # Each launch leaves ENTRY-<token>.log/.started/.done in the kit folder: the
 # handshake Thor-Forever.exe waits on. Holding the lock means every earlier
@@ -340,7 +363,7 @@ if [ "$tf_esync" = on ]; then
     # Esync needs one file descriptor per Windows sync object.
     print -r -- "FD_LIMIT soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
 fi
-export DXVK_LOG_PATH="Z:\\sdcard\\Download\\Thor-Forever\\INSTALLED-WOW-$n"
+export DXVK_LOG_PATH="Z:\\sdcard\\Download\\Thor-Forever\\logs\\run-$n"
 # With PROFILE=on, the Thor-tuned DXVK also writes frames.csv: one line per
 # frame with its duration and what DXVK did in it, to find stutters. Other
 # DXVK builds ignore the variable. Our test Wine (WINE=test) also writes,

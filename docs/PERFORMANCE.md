@@ -65,7 +65,7 @@ the Android settings in [TUNING.md](TUNING.md).
 ## How to measure
 
 Set `PROFILE=on` in `tuning.conf`, play, quit normally, then collect from
-`Download/Thor-Forever/INSTALLED-WOW-<n>/`:
+`Download/Thor-Forever/logs/run-<n>/` (the highest number is the newest run; only the last 3 runs are kept):
 
 | File | What it holds | Summarize with |
 | --- | --- | --- |

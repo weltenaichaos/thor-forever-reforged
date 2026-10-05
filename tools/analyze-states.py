@@ -1,5 +1,5 @@
 """Summarize state.csv (WoW's main thread every 50 ms, PROFILE=on).
-Run: python tools/analyze-states.py INSTALLED-WOW-<n>/state.csv [start_s end_s]
+Run: python tools/analyze-states.py logs/run-<n>/state.csv [start_s end_s]
 
 R = running, S = sleeping (waiting for another thread, a timer or I/O),
 D = waiting on the disk. A stall is a stretch of 100 ms or more in which
