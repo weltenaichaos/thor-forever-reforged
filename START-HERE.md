@@ -42,6 +42,10 @@ is not read-only. Never point Battle.net or an updater at this separate layout.
    that your controls/settings remain selected.
 4. Do not open another copy while the first is running.
 
+Each launch writes its logs into **Thor-Forever > logs > run-<number>**
+(the highest number is the newest). Only the last 3 runs are kept. Older
+`INSTALLED-WOW-<number>` folders from earlier versions can be deleted.
+
 ## Open directly from GameHub
 
 With WoW closed, go to the same container's **Game Settings > General > Startup

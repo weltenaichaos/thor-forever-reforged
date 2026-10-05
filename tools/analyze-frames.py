@@ -1,5 +1,5 @@
 """Find stutters in a frames.csv written by the Thor-tuned DXVK (PROFILE=on).
-Run: python tools/analyze-frames.py INSTALLED-WOW-<n>/frames.csv [start_s end_s]
+Run: python tools/analyze-frames.py logs/run-<n>/frames.csv [start_s end_s]
 
 A frame counts as a stutter when it takes at least twice as long as the
 frames around it, and at least 25 ms longer. Each stutter gets the most

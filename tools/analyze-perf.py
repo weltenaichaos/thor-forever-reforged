@@ -1,5 +1,5 @@
 """Summarize a perf.csv written by launch-game.sh with PROFILE=on.
-Run: python tools/analyze-perf.py INSTALLED-WOW-<n>/perf.csv [start_s end_s]
+Run: python tools/analyze-perf.py logs/run-<n>/perf.csv [start_s end_s]
 The optional range limits the summary to seconds since the first sample,
 for example the part of the session spent in a city.
 """

@@ -62,6 +62,6 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR args, int show
     while (*end == '\r' || *end == '\n') ++end;
     if (*end || parsed > 255) return 7;
     int code = (int)parsed;
-    if (code) MessageBoxW(NULL, L"The game stopped with an error. Keep the newest INSTALLED-WOW folder and ENTRY log for diagnosis.", L"Thor Forever", MB_OK | MB_ICONWARNING);
+    if (code) MessageBoxW(NULL, L"The game stopped with an error. Keep the newest logs\\run folder and ENTRY log for diagnosis.", L"Thor Forever", MB_OK | MB_ICONWARNING);
     return code;
 }
