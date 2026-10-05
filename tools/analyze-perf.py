@@ -15,7 +15,7 @@ def main(path, start=None, end=None):
     for line in open(path, encoding='utf-8', errors='replace'):
         parts = line.rstrip('\n').split(',')
         if parts[0] == 'T' and len(parts) == 2:
-            current = {'t': float(parts[1]), 'f': {}, 'g': None, 'l': None, 'th': {}, 'io': None, 'fds': {}, 'kinds': {}}
+            current = {'t': float(parts[1]), 'f': {}, 'g': None, 'l': None, 'th': {}, 'io': None, 'fds': {}, 'kinds': {}, 'mem': None, 'rss': None}
             samples.append(current)
         elif current is None:
             continue
@@ -30,6 +30,10 @@ def main(path, start=None, end=None):
             current['io'] = int(parts[2])
         elif parts[0] == 'n' and len(parts) == 4 and parts[3].isdigit():
             current['fds'][parts[1]] = int(parts[3])
+        elif parts[0] == 'M' and len(parts) == 3 and parts[1].isdigit():
+            current['mem'] = (int(parts[1]), int(parts[2]) if parts[2].isdigit() else None)
+        elif parts[0] == 'r' and len(parts) == 3 and parts[2].isdigit():
+            current['rss'] = int(parts[2])
         elif parts[0] == 'k' and len(parts) == 3 and parts[2].isdigit():
             current['kinds'][parts[1]] = int(parts[2])
         elif parts[0] == 't' and len(parts) == 7:
@@ -111,6 +115,18 @@ def main(path, start=None, end=None):
             peak = max(counts, key=lambda c: c[1])
             print(f'\n{name} open fds: {counts[0][1]} at start, {counts[-1][1]} at end, '
                   f'peak {peak[1]} at {peak[0]:.0f}s')
+    # Memory: Android kills apps when free memory runs low.
+    mem = [(s['t'] - t0, s['mem']) for s in picked if s['mem']]
+    rss = [(s['t'] - t0, s['rss']) for s in picked if s['rss']]
+    if mem:
+        low = min(mem, key=lambda m: m[1][0])
+        print(f'\nFree memory: {mem[0][1][0] // 1024} MB at start, {mem[-1][1][0] // 1024} MB at end, '
+              f'lowest {low[1][0] // 1024} MB at {low[0]:.0f}s'
+              + (f', swap free {mem[-1][1][1] // 1024} MB at end' if mem[-1][1][1] is not None else ''))
+    if rss:
+        peak = max(rss, key=lambda r: r[1])
+        print(f'WoW memory: {rss[0][1] // 1024} MB at start, {rss[-1][1] // 1024} MB at end, '
+              f'peak {peak[1] // 1024} MB at {peak[0]:.0f}s')
     kinds = [(s['t'] - t0, s['kinds']) for s in picked if s['kinds']]
     if kinds:
         print('WoW open fds by kind (logged every 30 s above 1000 fds):')

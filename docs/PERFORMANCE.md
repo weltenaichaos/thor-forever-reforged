@@ -69,7 +69,7 @@ Set `PROFILE=on` in `tuning.conf`, play, quit normally, then collect from
 
 | File | What it holds | Summarize with |
 | --- | --- | --- |
-| `perf.csv` | every 2 s: CPU per thread (user/kernel) and its core, core clocks, GPU load and clock, WoW's disk reads, WoW's open fds (by kind every 30 s above 1000) | `python tools/analyze-perf.py perf.csv [start end]` |
+| `perf.csv` | every 2 s: CPU per thread (user/kernel) and its core, core clocks, GPU load and clock, WoW's disk reads, WoW's open fds (by kind every 30 s above 1000), WoW's memory use and the device's free memory | `python tools/analyze-perf.py perf.csv [start end]` |
 | `frames.csv` | every frame: frame time, draws, new pipelines, DXVK CS/GPU waits, shader and resource creation time, time inside DXVK (`api_ms`) | `python tools/analyze-frames.py frames.csv [start end]` |
 | `state.csv` | WoW's main thread every 50 ms: running, sleeping or on disk, what it waits in, and run-queue wait | `python tools/analyze-states.py state.csv [start end]` |
 | `wine.log` | esync errors, and `server-stats` lines every 5 s (wineserver round trips) | read directly |

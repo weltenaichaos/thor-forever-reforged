@@ -371,7 +371,8 @@ tf_stage=game
 cd "$GAME" || exit 18
 # PROFILE=on samples, every 2 seconds, the CPU time and current core of each
 # WoW and wineserver thread, how much WoW has read from storage, how many
-# files each has open, every core's clock and the GPU load into perf.csv.
+# files each has open and its memory use, free memory, every core's clock
+# and the GPU load into perf.csv.
 # It only reads /proc and /sys with shell builtins.
 # Prints "k,<kind>,<count>" for the open fds of process $1 (for example
 # eventfd or sync_file), from the link targets toybox ls shows.
@@ -425,6 +426,12 @@ tf_profile_loop()
         IFS= read -r tf_gt </sys/class/kgsl/kgsl-3d0/thermal_pwrlevel 2>/dev/null
         IFS= read -r tf_gc </sys/class/kgsl/kgsl-3d0/temp 2>/dev/null
         print -r -- "L,$tf_gm,$tf_gt,${tf_gc%%[!0-9]*}"
+        # Free memory (kB): Android kills apps when it runs low.
+        tf_ma= tf_sf=
+        { while IFS=': ' read -r tf_key tf_val _; do
+            case "$tf_key" in MemAvailable) tf_ma=$tf_val ;; SwapFree) tf_sf=$tf_val ;; esac
+        done </proc/meminfo; } 2>/dev/null
+        print -r -- "M,$tf_ma,$tf_sf"
         for tf_p in /proc/[0-9]*; do
             IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null || continue
             case "$tf_n" in WowB-ARM64.exe|wineserver) ;; *) continue ;; esac
@@ -441,6 +448,12 @@ tf_profile_loop()
                     case "$tf_key" in rchar) tf_rc=$tf_val ;; read_bytes) tf_rb=$tf_val ;; esac
                 done <"$tf_p/io"; } 2>/dev/null
                 print -r -- "i,${tf_p##*/},$tf_rc,$tf_rb"
+                # WoW's memory use (resident, kB).
+                tf_rss=
+                { while IFS=':	 ' read -r tf_key tf_val _; do
+                    [ "$tf_key" = VmRSS ] && tf_rss=$tf_val
+                done <"$tf_p/status"; } 2>/dev/null
+                print -r -- "r,${tf_p##*/},$tf_rss"
             fi
             for tf_t in "$tf_p"/task/[0-9]*; do
                 IFS= read -r tf_tn <"$tf_t/comm" 2>/dev/null || continue
