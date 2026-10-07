@@ -35,6 +35,10 @@ button says **Repair**. Repair renames the old installation to
 `release-v1.old-<n>` (nothing is deleted), installs again and copies your
 game settings (the WTF folder) over.
 
+To redo a working installation (for example to test Install), create a file
+named `repair` or `repair.txt` in Download/Thor-Forever; the start screen then
+offers Repair, and removes the file once Repair succeeds.
+
 `Install-Thor-Forever.cmd` (run from the container desktop, result in
 `setup-report/result.txt`) still works the same way as before.
 

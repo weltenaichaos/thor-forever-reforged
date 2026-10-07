@@ -54,6 +54,11 @@ class InstallStateTests(unittest.TestCase):
         self.install()
         self.assertEqual(self.state()[0], 'STATE installed')
 
+    def test_repair_file_offers_repair(self):
+        self.install()
+        (self.kit / 'repair').write_bytes(b'')
+        self.assertEqual(self.state()[0], 'STATE broken')
+
     def test_unfinished_is_broken(self):
         self.install(complete=False)
         self.assertEqual(self.state()[0], 'STATE broken')

@@ -53,6 +53,10 @@ why=
 while IFS= read -r tf_line; do why="$why$tf_line "; done <"$out.why"
 rm -f "$out.why" "$out.phase"
 [ "$result" = 0 ] || finish "$result" "$why"
+# The "repair" request file (see install-state.sh) has done its job.
+for tf_file in "$KIT/repair" "$KIT/repair.txt"; do
+    [ -f "$tf_file" ] && [ ! -L "$tf_file" ] && rm -f "$tf_file"
+done
 # Keep the player's game settings, key bindings and macros from before.
 if [ -n "$old" ] && [ -d "$old/game/_classic_beta_/WTF" ] && [ ! -L "$old/game/_classic_beta_/WTF" ]; then
     cp -R "$old/game/_classic_beta_/WTF/." "$INSTALL/game/_classic_beta_/WTF/" ||
