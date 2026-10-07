@@ -147,7 +147,7 @@ jobs:
 
       - name: Zip
         run: |
-          # One top folder, so extracting into Download/ gives Download/Thor-Forever.
+          # One top folder, so extracting into any folder (Download/ by default) gives <folder>/Thor-Forever.
           (cd out && zip -qr -9 "../Thor-Forever-Reforged-$TAG.zip" Thor-Forever)
           unzip -tq "Thor-Forever-Reforged-$TAG.zip"
           ls -l "Thor-Forever-Reforged-$TAG.zip"
@@ -166,8 +166,8 @@ jobs:
           Complete download: everything needed is in **Thor-Forever-Reforged-$TAG.zip**.
 
           1. Install World of Warcraft (Forever beta, ARM64) in a GameHub Lite container through Battle.net, as usual.
-          2. Extract the zip into your **Download** folder, so that you get **Download/Thor-Forever**.
-          3. In GameHub, set this container's **Startup File Path** to **Download/Thor-Forever/Thor-Forever.exe** and press Play.
+          2. Extract the zip into a folder in your internal storage, for example **Download**, so that you get a **Thor-Forever** folder (here **Download/Thor-Forever**). Any place in internal shared storage works if its path has only letters, digits, - _ and . (no spaces) and is not inside Android/data or Android/obb.
+          3. In GameHub, set this container's **Startup File Path** to **Thor-Forever.exe** in that folder (here **Download/Thor-Forever/Thor-Forever.exe**) and press Play.
           4. The start screen says Thor Forever is not installed yet. Press **Install** and wait a few minutes. Then press **Play**.
 
           Details: START-HERE.md in the zip. Built from $GITHUB_SHA by the Package release workflow.
