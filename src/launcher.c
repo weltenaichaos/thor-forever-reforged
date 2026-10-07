@@ -119,7 +119,7 @@ static const wchar_t *in_kit(const wchar_t *rel)
 static const wchar_t *const program_dirs[] = {
     L"C:\\Program Files (x86)", L"C:\\Program Files"
 };
-static HWND menu_window, version_text, status_text, play_button, notice_text, device_text;
+static HWND menu_window, version_text, status_text, play_button, notice_text;
 
 /* Settings that can be changed on the start screen. Each tap on a button
  * moves to the next value and saves it to tuning.conf. */
@@ -137,7 +137,7 @@ static struct setting settings[] = {
 };
 #define SETTING_COUNT (int)(sizeof(settings) / sizeof(*settings))
 static char tuning[65536];
-static HFONT font, big_font, small_font;
+static HFONT font, label_font;
 static HBRUSH background_brush;
 static int header_height;
 
@@ -606,9 +606,31 @@ static HBITMAP make_header(HDC screen, int w, int h)
         SelectObject(dc, forever);
         SetTextCharacterExtra(dc, u / 8);
         logo_word(dc, L"FOREVER", w * SCALE / 2, u * 46 / 20, white);
+        /* "on the AYN Thor" right of FOREVER, on its baseline. */
+        {
+            SIZE word, small;
+            HFONT device = CreateFontW(-u / 2, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                                       ANTIALIASED_QUALITY, 0, heading_face);
+            TEXTMETRICW big_metrics, small_metrics;
+            int x0, base;
+            GetTextExtentPoint32W(dc, L"FOREVER", 7, &word);
+            GetTextMetricsW(dc, &big_metrics);
+            base = u * 46 / 20 - word.cy / 2 + big_metrics.tmAscent;
+            x0 = w * SCALE / 2 + word.cx / 2 + u / 3;
+            SetTextCharacterExtra(dc, u / 40);
+            SelectObject(dc, device);
+            GetTextMetricsW(dc, &small_metrics);
+            GetTextExtentPoint32W(dc, L"on the AYN Thor", 15, &small);
+            SetTextColor(dc, RGB(10, 22, 34));
+            TextOutW(dc, x0 + SCALE, base - small_metrics.tmAscent + SCALE, L"on the AYN Thor", 15);
+            SetTextColor(dc, TF_SKY);
+            TextOutW(dc, x0, base - small_metrics.tmAscent, L"on the AYN Thor", 15);
+            SelectObject(dc, forever);
+            DeleteObject(device);
+        }
         SetTextCharacterExtra(dc, 0);
     }
-    swash(dc, w * SCALE / 2, u * 7 / 2, u * 6 / 5, u / 14);
+    swash(dc, w * SCALE / 2, u * 7 / 2, u * 6 / 5, u / 22);
     SelectObject(dc, old);
     DeleteObject(title);
     DeleteObject(forever);
@@ -693,17 +715,17 @@ static void draw_button(const DRAWITEMSTRUCT *d)
         label.bottom = r.top + (r.bottom - r.top) * 9 / 20;
         value.top = label.bottom;
         value.bottom = r.bottom - (r.bottom - r.top) / 10;
-        SelectObject(dc, small_font);
-        SetTextColor(dc, disabled ? ink : TF_SKY_DARK);
+        SelectObject(dc, label_font);
+        SetTextColor(dc, disabled ? ink : TF_SKY);
         DrawTextW(dc, text, -1, &label, DT_CENTER | DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX);
-        SelectObject(dc, font);
+        SelectObject(dc, button_font);
         SetTextColor(dc, disabled ? ink : TF_GOLD_LIGHT);
         DrawTextW(dc, colon[1] == L' ' ? colon + 2 : colon + 1, -1, &value,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     } else {
         RECT measure = r;
         int height;
-        SelectObject(dc, play ? big_font : button_font);
+        SelectObject(dc, button_font);
         SetTextColor(dc, ink);
         InflateRect(&measure, -4, 0);
         height = DrawTextW(dc, text, -1, &measure, DT_CENTER | DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX);
@@ -780,8 +802,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_CTLCOLORSTATIC: {
         HDC dc = (HDC)wparam;
         HWND control = (HWND)lparam;
-        SetTextColor(dc, control == notice_text ? TF_WARNING : control == version_text ? TF_GOLD_LIGHT :
-                         control == device_text ? TF_SKY : TF_TEXT);
+        SetTextColor(dc, control == notice_text ? TF_WARNING : control == version_text ? TF_GOLD_LIGHT : TF_TEXT);
         SetBkColor(dc, TF_BACKGROUND);
         return (LRESULT)background_brush;
     }
@@ -801,23 +822,21 @@ static int show_menu(HINSTANCE instance)
     MSG msg;
     HWND window;
     int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
-    int u = sh / 24, w = sw * 3 / 5, h, x = u, y = u, bw, i;
+    int u = sh / 24, w = sw * 3 / 5, h, x = u, y = u, bw, bh, i;
     if (u < 16) u = 16;
     if (w < 24 * u) w = 24 * u < sw ? 24 * u : sw;
     header_height = u * 17 / 4;
-    h = header_height + u * 23 / 2;
+    h = header_height + u * 11;
     /* Cinzel from fonts/, for this program only; Tahoma when it is missing. */
     if (AddFontResourceExW(in_kit(L"\\fonts\\Cinzel-Bold.ttf"), FR_PRIVATE, 0)) heading_face = L"Cinzel";
     unit = u;
     button_font = CreateFontW(-u * 2 / 3, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                               ANTIALIASED_QUALITY, 0, heading_face);
-    small_font = CreateFontW(-u / 2, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
-                             CLEARTYPE_QUALITY, 0, L"Tahoma");
+    label_font = CreateFontW(-u / 2, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                             ANTIALIASED_QUALITY, 0, heading_face);
     background_brush = CreateSolidBrush(TF_BACKGROUND);
     font = CreateFontW(-u * 2 / 3, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                        CLEARTYPE_QUALITY, 0, L"Tahoma");
-    big_font = CreateFontW(-u, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
-                           ANTIALIASED_QUALITY, 0, heading_face);
     wc.lpfnWndProc = window_proc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
@@ -839,28 +858,28 @@ static int show_menu(HINSTANCE instance)
         w = client.right;
     }
     y = header_height + u / 2;
-    version_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, (w - 2 * u) * 2 / 3, u, 0, font);
-    device_text = add_control(window, L"STATIC", L"on the AYN Thor", SS_RIGHT, x + (w - 2 * u) * 2 / 3, y,
-                              (w - 2 * u) / 3, u, 0, button_font);
+    version_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u, 0, font);
     y += u;
     status_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u * 2, 0, font);
     y += u * 3;
+    /* All six buttons share one size and style; Play is the teal one. */
     bw = (w - 4 * u) / 3;
+    bh = u * 5 / 2;
     if (!read_text(in_kit(L"\\tuning.conf"), tuning, sizeof(tuning))) tuning[0] = 0;
     for (i = 0; i < SETTING_COUNT; ++i) {
         settings[i].button = add_control(window, L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP,
-                                         x + i * (bw + u), y, bw, u * 2, ID_SETTING + i, font);
+                                         x + i * (bw + u), y, bw, bh, ID_SETTING + i, font);
         show_setting(&settings[i]);
     }
-    y += u * 3;
+    y += bh + u / 2;
     play_button = add_control(window, L"BUTTON", L"Play", BS_OWNERDRAW | WS_TABSTOP,
-                              x, y, bw, u * 3, ID_PLAY, big_font);
+                              x, y, bw, bh, ID_PLAY, button_font);
     add_control(window, L"BUTTON", L"Update with Battle.net", BS_OWNERDRAW | WS_TABSTOP,
-                x + bw + u, y, bw, u * 3, ID_UPDATE, font);
+                x + bw + u, y, bw, bh, ID_UPDATE, button_font);
     add_control(window, L"BUTTON", L"Quit", BS_OWNERDRAW | WS_TABSTOP,
-                x + 2 * (bw + u), y, bw, u * 3, ID_QUIT, font);
+                x + 2 * (bw + u), y, bw, bh, ID_QUIT, button_font);
     /* Shown only when the game is installed in more than one container. */
-    y += u * 4;
+    y += bh + u;
     notice_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u * 4, 0, font);
     ShowWindow(notice_text, SW_HIDE);
     refresh();
@@ -874,8 +893,7 @@ static int show_menu(HINSTANCE instance)
         DispatchMessageW(&msg);
     }
     DeleteObject(font);
-    DeleteObject(big_font);
-    DeleteObject(small_font);
+    DeleteObject(label_font);
     if (header_cache) DeleteObject(header_cache);
     header_cache = NULL;
     DeleteObject(button_font);
