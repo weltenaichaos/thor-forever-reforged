@@ -672,9 +672,11 @@ static void refresh_copies(void)
                  : L"The game is also installed in another GameHub container (%ls, %ls). "
                    L"You play from the copy in this container.", path, size_text);
         SetWindowTextW(remove_button, leftover ? L"Remove leftovers" : L"Remove other copy");
+        /* A result (like an error) goes first, so it is never cut off. */
         if (notice_message[0]) {
-            wcscat(text, L" ");
-            wcsncat(text, notice_message, 1023 - wcslen(text));
+            wchar_t note[1024];
+            swprintf(note, 1024, L"%ls %ls", notice_message, text);
+            wcscpy(text, note);
         }
         SetWindowTextW(notice_text, text);
         show_notice(1, 1);
