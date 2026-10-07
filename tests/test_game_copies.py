@@ -1,7 +1,6 @@
-"""Host tests for installer/game-copies.sh: listing and removing copies of the
-game in other GameHub containers. Pass a POSIX shell wrapper path as the
-argument (see test_discovery.py). Temporary fixtures only. Needs
-/system/bin/toybox (on a host, a wrapper that runs its arguments)."""
+"""Host tests for installer/game-copies.sh: listing copies of the game in
+other GameHub containers. Pass a POSIX shell wrapper path as the argument
+(see test_discovery.py). Temporary fixtures only."""
 import pathlib
 import subprocess
 import sys
@@ -11,7 +10,7 @@ import unittest
 SHELL = sys.argv.pop(1)
 INSTALLER = pathlib.Path(__file__).parents[1] / 'installer'
 SOURCE = ''.join((INSTALLER / name).read_text() + '\n'
-                 for name in ('discover-game.sh', 'stage-game.sh', 'game-copies.sh'))
+                 for name in ('discover-game.sh', 'game-copies.sh'))
 PROGRAMS = 'Program Files (x86)'
 
 
@@ -34,13 +33,6 @@ class GameCopiesTests(unittest.TestCase):
         (wow / 'Data/fixture').write_text('x' * 5000)
         return wow
 
-    def stage(self, wow):
-        game = self.usr / 'home/thor-forever/release-v1/game/_classic_beta_'
-        game.mkdir(parents=True)
-        (game.parent / 'Data').symlink_to(wow / 'Data')
-        (game / 'Interface').symlink_to(wow / '_classic_beta_/Interface')
-        return game
-
     def run_sh(self, body):
         script = SOURCE + body
         return subprocess.run([SHELL, 'sh'], input=script, text=True, cwd=self.root, capture_output=True)
@@ -50,10 +42,6 @@ class GameCopiesTests(unittest.TestCase):
         result = self.run_sh(f'tf_scan_copies usr "usr/home/virtual_containers/{here}" copies\n')
         self.assertEqual(result.returncode, 0, result.stderr)
         return out.read_text().splitlines() if out.exists() else None
-
-    def remove(self, here, name, game=''):
-        return self.run_sh(f'tf_remove_copy "$PWD/usr" "$PWD/usr/home/virtual_containers/{here}" '
-                           f'"{name}" "{game}"\n').returncode
 
     def test_one_copy_writes_nothing(self):
         self.add_game('a')
@@ -70,94 +58,12 @@ class GameCopiesTests(unittest.TestCase):
         (self.boxes / 'c').mkdir()
         self.assertEqual(sorted(self.scan('c')), ['ELSEWHERE a', 'ELSEWHERE b'])
 
-    def test_sizes(self):
-        self.add_game('a')
-        self.add_game('b')
-        self.scan('a')
-        result = self.run_sh('tf_copy_sizes usr copies sizes\n')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        kind, kb, name = (self.root / 'sizes').read_text().split()
-        self.assertEqual((kind, name), ('SIZE', 'b'))
-        self.assertGreater(int(kb), 0)
-
-    def test_removes_other_and_relinks_staged_game(self):
-        here = self.add_game('a')
-        other = self.add_game('b')
-        game = self.stage(other)
-        self.assertEqual(self.remove('a', 'b', game), 0)
-        self.assertFalse(other.exists())
-        self.assertTrue((self.boxes / 'b/drive_c').is_dir())
-        self.assertTrue((here / '_classic_beta_/WowB-ARM64.exe').exists())
-        self.assertEqual((game.parent / 'Data').resolve(), (here / 'Data').resolve())
-        self.assertEqual((game / 'Interface').resolve(), (here / '_classic_beta_/Interface').resolve())
-
-    def test_removes_read_only_folders(self):
-        # Wine maps the Windows read-only flag to folders without write
-        # permission; rm alone cannot empty those when not running as root.
-        self.add_game('a')
-        other = self.add_game('b')
-        (other / 'Data').chmod(0o555)
-        (other / '_classic_beta_').chmod(0o555)
-        try:
-            self.assertEqual(self.remove('a', 'b'), 0)
-            self.assertFalse(other.exists())
-        finally:
-            if other.exists():
-                for path in [other, *other.rglob('*')]:
-                    if path.is_dir():
-                        path.chmod(0o755)
-
-    def test_kill_tree_ends_grandchildren(self):
-        # The removal runs as a background function whose rm is a grandchild.
-        result = self.run_sh('( sleep 30 & print -r -- $! >gc; wait ) &\n'
-                             'p=$!\n'
-                             'while [ ! -s gc ]; do sleep 0.1; done\n'
-                             'tf_kill_tree "$p"\n'
-                             'sleep 0.3\n'
-                             'read -r gc <gc\n'
-                             'if kill -0 "$gc" 2>/dev/null; then echo alive; else echo gone; fi\n')
-        self.assertEqual(result.stdout.strip(), 'gone', result.stderr)
-
-    def test_free_kb(self):
-        result = self.run_sh('tf_free_kb . df.txt\n')
-        self.assertGreater(int(result.stdout.strip()), 0, result.stderr)
-        self.assertFalse((self.root / 'df.txt').exists())
-
-    def test_never_removes_this_containers_copy(self):
-        here = self.add_game('a')
-        self.add_game('b')
-        self.assertEqual(self.remove('a', 'a'), 4)
-        self.assertTrue(here.exists())
-
-    def test_refuses_without_a_copy_here(self):
-        self.add_game('a')
-        other = self.add_game('b')
-        (self.boxes / 'c').mkdir()
-        self.assertEqual(self.remove('c', 'b'), 3)
-        self.assertTrue(other.exists())
-
-    def test_refuses_odd_names(self):
-        self.add_game('a')
-        other = self.add_game('b')
-        for name in ('', '..', '../virtual_containers/b', 'b/drive_c'):
-            self.assertEqual(self.remove('a', name), 2, name)
-        self.assertTrue(other.exists())
-
-    def test_refuses_container_without_game_folder(self):
-        self.add_game('a')
-        (self.boxes / 'c/drive_c' / PROGRAMS).mkdir(parents=True)
-        self.assertEqual(self.remove('a', 'c'), 9)
-        self.assertTrue((self.boxes / 'c/drive_c' / PROGRAMS).exists())
-
-    def test_lists_and_removes_leftovers(self):
+    def test_lists_leftovers(self):
         # A copy whose removal stopped halfway: no WowB-ARM64.exe any more.
         self.add_game('a')
         other = self.add_game('b')
         (other / '_classic_beta_/WowB-ARM64.exe').unlink()
         self.assertEqual(self.scan('a'), ['LEFTOVER b'])
-        self.assertEqual(self.remove('a', 'b'), 0)
-        self.assertFalse(other.exists())
-        self.assertIsNone(self.scan('a'))
 
     def test_leftovers_only_listed_with_a_copy_here(self):
         other = self.add_game('b')
@@ -165,15 +71,6 @@ class GameCopiesTests(unittest.TestCase):
         self.add_game('a')
         (self.boxes / 'c').mkdir()
         self.assertIsNone(self.scan('c'))
-        self.assertEqual(self.remove('c', 'b'), 3)
-        self.assertTrue(other.exists())
-
-    def test_refuses_linked_container(self):
-        self.add_game('a')
-        other = self.add_game('b')
-        (self.boxes / 'link').symlink_to(self.boxes / 'b')
-        self.assertEqual(self.remove('a', 'link'), 5)
-        self.assertTrue(other.exists())
 
 
 if __name__ == '__main__':

@@ -22,14 +22,13 @@
 #define ID_PLAY 101
 #define ID_UPDATE 102
 #define ID_QUIT 103
-#define ID_REMOVE 104
 #define ID_SETTING 110
 #define ID_REFRESH 1
 
 static const wchar_t *const program_dirs[] = {
     L"C:\\Program Files (x86)", L"C:\\Program Files"
 };
-static HWND menu_window, version_text, status_text, play_button, notice_text, remove_button;
+static HWND menu_window, version_text, status_text, play_button, notice_text;
 
 /* Settings that can be changed on the start screen. Each tap on a button
  * moves to the next value and saves it to tuning.conf. */
@@ -48,10 +47,9 @@ static struct setting settings[] = {
 #define SETTING_COUNT (int)(sizeof(settings) / sizeof(*settings))
 static char tuning[65536];
 static HFONT font, big_font;
-static int bnet_started, removing, menu_width, menu_height, notice_height;
+static int bnet_started, menu_width, menu_height, notice_height;
+static wchar_t notice_buffer[1024];
 static void refresh_copies(void);
-static void remove_other_copy(HWND window);
-static int stop_removal(HWND window);
 
 /* Reads a small text file into buffer, NUL-terminated. */
 static int read_text(const wchar_t *path, char *buffer, DWORD size)
@@ -348,7 +346,6 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
         switch (LOWORD(wparam)) {
         case ID_PLAY:
         case IDOK:
-            if (removing) return 0;
             if (battle_net_open() &&
                 MessageBoxW(window, L"Battle.net is still open. If it is updating the game, "
                             L"starting now breaks the update.\n\nClose Battle.net and start the game?",
@@ -369,10 +366,6 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
                             L"Thor Forever", MB_OK | MB_ICONERROR);
             }
             return 0;
-        case ID_REMOVE:
-            if (removing) stop_removal(window);
-            else remove_other_copy(window);
-            return 0;
         case ID_SETTING:
         case ID_SETTING + 1:
         case ID_SETTING + 2:
@@ -380,7 +373,6 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
             return 0;
         case ID_QUIT:
         case IDCANCEL:
-            if (removing && !stop_removal(window)) return 0;
             DestroyWindow(window);
             PostQuitMessage(ID_QUIT);
             return 0;
@@ -390,7 +382,6 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
         refresh();
         return 0;
     case WM_CLOSE:
-        if (removing && !stop_removal(window)) return 0;
         DestroyWindow(window);
         PostQuitMessage(ID_QUIT);
         return 0;
@@ -425,7 +416,7 @@ static int show_menu(HINSTANCE instance)
     menu_window = window;
     menu_width = w;
     menu_height = h;
-    notice_height = 5 * u;
+    notice_height = 4 * u;
     {
         RECT client;
         GetClientRect(window, &client);
@@ -454,11 +445,8 @@ static int show_menu(HINSTANCE instance)
                 x + 2 * (bw + u), y, bw, u * 3, ID_QUIT, font);
     /* Shown only when the game is installed in more than one container. */
     y += u * 4;
-    notice_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, 2 * bw + u, u * 4, 0, font);
-    remove_button = add_control(window, L"BUTTON", L"Remove other copy", BS_PUSHBUTTON | WS_TABSTOP,
-                                x + 2 * (bw + u), y, bw, u * 2, ID_REMOVE, font);
+    notice_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u * 3, 0, font);
     ShowWindow(notice_text, SW_HIDE);
-    ShowWindow(remove_button, SW_HIDE);
     refresh();
     SetTimer(window, ID_REFRESH, 2000, NULL);
     ShowWindow(window, SW_SHOW);
@@ -566,47 +554,15 @@ static void cancel_bridge(void)
 }
 
 /* With the game installed in more than one GameHub container, the waiting
- * bridge lists the copies in logs\\ENTRY-<token>.copies ("HERE", "OTHER" or
- * "ELSEWHERE" and the container's folder name) and their sizes in .sizes
- * (installer/game-copies.sh). The start screen shows a notice and can ask
- * the bridge to delete the other container's World of Warcraft folder
- * (.remove); the answer comes back in .removed. */
-static char other_name[128];
-static wchar_t notice_message[512];
-/* While removing: the bridge's last uptime in .progress, and when it last
- * changed. No change for a minute means the bridge is gone. */
-static unsigned long removal_beat;
-static ULONGLONG removal_seen;
-
-static int container_name_ok(const char *name)
-{
-    size_t n = strlen(name), i;
-    if (!n || n >= sizeof(other_name) || !strcmp(name, ".") || !strcmp(name, "..")) return 0;
-    for (i = 0; i < n; ++i) {
-        char c = name[i];
-        if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
-              c == '_' || c == '-' || c == '.')) return 0;
-    }
-    return 1;
-}
-
-/* Splits "KIND rest of line" at the first space; returns the next line. */
-static char *split_line(char *line, char **kind, char **rest)
-{
-    char *end = line + strcspn(line, "\r\n"), *next = *end ? end + 1 : end;
-    *end = 0;
-    *kind = line;
-    *rest = strchr(line, ' ');
-    if (*rest) *(*rest)++ = 0;
-    else *rest = end;
-    return next;
-}
-
-static void show_notice(int on, int button)
+ * bridge lists the copies in logs\\ENTRY-<token>.copies ("HERE", "OTHER",
+ * "LEFTOVER" or "ELSEWHERE" and the container's folder name; see
+ * installer/game-copies.sh), and the start screen shows a note. It does not
+ * offer to delete the other copy: on the device, a delete aimed at another
+ * container from inside GameHub removed files elsewhere (the logs folder). */
+static void show_notice(int on)
 {
     int shown = IsWindowVisible(notice_text);
     RECT r;
-    ShowWindow(remove_button, on && button ? SW_SHOW : SW_HIDE);
     if (on == shown) return;
     ShowWindow(notice_text, on ? SW_SHOW : SW_HIDE);
     /* Grows the window, staying centered. */
@@ -615,214 +571,47 @@ static void show_notice(int on, int button)
                  menu_width, menu_height + (on ? notice_height : 0), SWP_NOZORDER);
 }
 
-/* Appends the end of a bridge file (at most max characters) to box. */
-static void append_tail(wchar_t *box, size_t size, const wchar_t *suffix, size_t max)
-{
-    static char data[65536];
-    static wchar_t wide[4096];
-    wchar_t path[512];
-    size_t length;
-    entry_path(path, bridge_token, suffix);
-    if (!read_text(path, data, sizeof(data))) return;
-    length = strlen(data);
-    if (!MultiByteToWideChar(CP_UTF8, 0, data + (length > max ? length - max : 0), -1, wide, 4096)) return;
-    wide[4095] = 0;
-    swprintf(box + wcslen(box), size - wcslen(box), L"\n--- .%ls ---\n%ls", suffix, wide);
-}
-
-/* For a removal that went quiet: shows which of this launch's bridge files
- * exist and the end of the log, as the log may not be visible on the device. */
-static void show_bridge_files(const wchar_t *title)
-{
-    static wchar_t box[8192];
-    wchar_t pattern[512];
-    WIN32_FIND_DATAW found;
-    HANDLE find;
-    swprintf(box, 8192, L"%ls Please send a screenshot of this.\n\nFiles:", title);
-    swprintf(box + wcslen(box), 8192 - wcslen(box), L" (this launch is %ls)", bridge_token);
-    swprintf(pattern, 512, L"%ls\\logs\\*", KIT);
-    find = FindFirstFileW(pattern, &found);
-    if (find != INVALID_HANDLE_VALUE) {
-        do {
-            if (found.cFileName[0] == '.') continue;
-            swprintf(box + wcslen(box), 8192 - wcslen(box), L"\n  %ls (%lu)", found.cFileName,
-                     (unsigned long)found.nFileSizeLow);
-        } while (FindNextFileW(find, &found) && wcslen(box) < 6000);
-        FindClose(find);
-    }
-    append_tail(box, 8192, L"rc", 20);
-    append_tail(box, 8192, L"progress", 100);
-    append_tail(box, 8192, L"why", 900);
-    append_tail(box, 8192, L"log", 900);
-    MessageBoxW(menu_window, box, L"Thor Forever", MB_OK | MB_ICONWARNING);
-}
-
 static void refresh_copies(void)
 {
-    static char copies[4096], sizes[4096];
-    wchar_t path[512], text[1024], size_text[64] = L"size not measured yet";
-    char *line, *kind, *rest, first_other[128] = "";
-    int others = 0, elsewhere = 0, leftover = 0, i;
+    static char copies[4096];
+    wchar_t path[512], name[24];
+    char *line, *end, *rest;
+    int other = 0, leftover = 0, elsewhere = 0, i;
     if (!bridge_waiting) return;
-    if (removing) {
-        static char result[4096];
-        static wchar_t details[4096];
-        char *rest;
-        entry_path(path, bridge_token, L"removed");
-        if (!read_text(path, result, sizeof(result))) {
-            unsigned long beat = 0;
-            long freed = 0;
-            entry_path(path, bridge_token, L"progress");
-            if (read_text(path, result, 64) && sscanf(result, "%lu %ld", &beat, &freed) == 2 &&
-                beat != removal_beat) {
-                removal_beat = beat;
-                removal_seen = GetTickCount64();
-                swprintf(text, 1024, L"Removing the other game copy: %.1f GB freed so far. "
-                         L"Play works again when it's done.", (freed > 0 ? freed : 0) / (1024.0 * 1024.0));
-                SetWindowTextW(notice_text, text);
-            }
-            if (GetTickCount64() - removal_seen < 60000) return;
-            /* The bridge stopped reporting: it is not running any more. */
-            show_bridge_files(L"The removal stopped responding.");
-            removing = 0;
-            EnableWindow(play_button, TRUE);
-            SetWindowTextW(remove_button, L"Remove other copy");
-            swprintf(notice_message, 512, L"The removal stopped responding. Close Thor Forever, "
-                     L"start it again from GameHub and try once more.");
-            SetWindowTextW(notice_text, notice_message);
-            show_notice(1, 0);
-            return;
-        }
-        DeleteFileW(path);
-        removing = 0;
-        EnableWindow(play_button, TRUE);
-        if (atoi(result) == 0 && result[0] == '0') {
-            swprintf(notice_message, 512, L"The other game copy was removed.");
-        } else if (atoi(result) == 130) {
-            swprintf(notice_message, 512, L"Removing was stopped. What is left can be removed next time.");
-        } else {
-            swprintf(notice_message, 512, L"Could not remove the other game copy (code %d).", atoi(result));
-            /* The bridge adds what happened after the code; show it here,
-             * as the log may not be visible in every file manager. */
-            rest = strchr(result, '\n');
-            if (!rest || !MultiByteToWideChar(CP_UTF8, 0, rest + 1, -1, details, 3000)) details[0] = 0;
-            details[3000] = 0;
-            swprintf(text, 1024, L"%ls Details:\n\n", notice_message);
-            {
-                static wchar_t box[4200];
-                swprintf(box, 4200, L"%ls%ls", text, details);
-                MessageBoxW(menu_window, box, L"Thor Forever", MB_OK | MB_ICONWARNING);
-            }
-        }
-    }
     entry_path(path, bridge_token, L"copies");
     if (!read_text(path, copies, sizeof(copies))) copies[0] = 0;
-    for (line = copies; *line;) {
-        line = split_line(line, &kind, &rest);
-        if (!strcmp(kind, "OTHER") || !strcmp(kind, "LEFTOVER")) {
-            /* A half-removed copy: its World of Warcraft folder is still there. */
-            if (!others++ && container_name_ok(rest)) {
-                strcpy(first_other, rest);
-                leftover = !strcmp(kind, "LEFTOVER");
-            }
-        } else if (!strcmp(kind, "ELSEWHERE")) {
-            ++elsewhere;
+    name[0] = 0;
+    for (line = copies; *line; line = *end ? end + 1 : end) {
+        end = line + strcspn(line, "\r\n");
+        rest = strchr(line, ' ');
+        if (!rest || rest > end) continue;
+        ++rest;
+        if (!strncmp(line, "OTHER ", 6)) ++other;
+        else if (!strncmp(line, "LEFTOVER ", 9)) ++leftover;
+        else if (!strncmp(line, "ELSEWHERE ", 10)) ++elsewhere;
+        else continue;
+        if (!name[0]) {
+            /* The start of the container's name is enough to recognise it. */
+            for (i = 0; i < 14 && rest + i < end; ++i) name[i] = (unsigned char)rest[i];
+            wcscpy(name + i, rest + i < end ? L"..." : L"");
         }
     }
-    strcpy(other_name, first_other);
-    if (removing) return;
-    if (other_name[0]) {
-        entry_path(path, bridge_token, L"sizes");
-        if (!read_text(path, sizes, sizeof(sizes))) sizes[0] = 0;
-        for (line = sizes; *line;) {
-            char *kb;
-            line = split_line(line, &kind, &kb);
-            if (strcmp(kind, "SIZE") || !(rest = strchr(kb, ' '))) continue;
-            *rest++ = 0;
-            if (!strcmp(rest, other_name))
-                swprintf(size_text, 64, L"%.1f GB", strtod(kb, NULL) / (1024.0 * 1024.0));
-        }
-        for (i = 0; other_name[i] && i < 14; ++i) path[i] = (unsigned char)other_name[i];
-        wcscpy(path + i, other_name[i] ? L"..." : L"");
-        swprintf(text, 1024, leftover
-                 ? L"Leftovers of a game copy are still in another GameHub container (%ls, %ls). "
-                   L"You play from the copy in this container."
-                 : L"The game is also installed in another GameHub container (%ls, %ls). "
-                   L"You play from the copy in this container.", path, size_text);
-        SetWindowTextW(remove_button, leftover ? L"Remove leftovers" : L"Remove other copy");
-        /* A result (like an error) goes first, so it is never cut off. */
-        if (notice_message[0]) {
-            wchar_t note[1024];
-            swprintf(note, 1024, L"%ls %ls", notice_message, text);
-            wcscpy(text, note);
-        }
-        SetWindowTextW(notice_text, text);
-        show_notice(1, 1);
-    } else if (others || elsewhere) {
-        SetWindowTextW(notice_text, others
-                       ? L"The game is also installed in another GameHub container. Its folder name has "
-                         L"unusual characters, so it can't be removed from here."
-                       : L"The game is installed in other GameHub containers, but not in this one. "
-                         L"Start Thor Forever from the container you play in.");
-        show_notice(1, 0);
-    } else if (notice_message[0]) {
-        SetWindowTextW(notice_text, notice_message);
-        show_notice(1, 0);
+    if (other || leftover) {
+        swprintf(notice_buffer, 1024, other
+                 ? L"The game is also installed in another GameHub container (%ls). You play from the "
+                   L"copy in this container. To free its storage, delete that container in GameHub."
+                 : L"Part of a game copy is still in another GameHub container (%ls). You play from the "
+                   L"copy in this container. To free its storage, delete that container in GameHub.",
+                 name);
+        SetWindowTextW(notice_text, notice_buffer);
+        show_notice(1);
+    } else if (elsewhere) {
+        SetWindowTextW(notice_text, L"The game is installed in other GameHub containers, but not in this "
+                                    L"one. Start Thor Forever from the container you play in.");
+        show_notice(1);
     } else {
-        show_notice(0, 0);
+        show_notice(0);
     }
-}
-
-/* Asks before deleting: the other container's World of Warcraft folder. */
-static void remove_other_copy(HWND window)
-{
-    wchar_t path[512], tmp[512], text[512], name[128];
-    char line[160];
-    HANDLE file;
-    DWORD written;
-    int i, ok;
-    if (removing || !other_name[0]) return;
-    for (i = 0; other_name[i]; ++i) name[i] = (unsigned char)other_name[i];
-    name[i] = 0;
-    swprintf(text, 512, L"Delete the World of Warcraft folder in the other GameHub container (%ls)?\n\n"
-             L"The game in this container stays as it is, with its settings and addons. "
-             L"This can't be undone.", name);
-    if (MessageBoxW(window, text, L"Thor Forever", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) return;
-    entry_path(path, bridge_token, L"remove");
-    entry_path(tmp, bridge_token, L"remove.tmp");
-    snprintf(line, sizeof(line), "%s\n", other_name);
-    file = CreateFileW(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    ok = file != INVALID_HANDLE_VALUE;
-    if (ok) {
-        ok = WriteFile(file, line, (DWORD)strlen(line), &written, NULL) && written == strlen(line);
-        CloseHandle(file);
-    }
-    if (!ok || !MoveFileExW(tmp, path, MOVEFILE_REPLACE_EXISTING)) {
-        DeleteFileW(tmp);
-        MessageBoxW(window, L"Could not ask for the removal.", L"Thor Forever", MB_OK | MB_ICONERROR);
-        return;
-    }
-    removing = 1;
-    removal_beat = 0;
-    removal_seen = GetTickCount64();
-    notice_message[0] = 0;
-    EnableWindow(play_button, FALSE);
-    SetWindowTextW(remove_button, L"Stop removing");
-    SetWindowTextW(notice_text, L"Removing the other game copy. Play works again when it's done.");
-}
-
-/* Asks the bridge to stop removing (also before quitting). Returns 1 if
- * the player agreed. */
-static int stop_removal(HWND window)
-{
-    wchar_t path[512];
-    if (MessageBoxW(window, L"Stop removing the other game copy?\n\nWhat is left can be removed next time.",
-                    L"Thor Forever", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
-        return 0;
-    entry_path(path, bridge_token, L"stop");
-    touch(path);
-    SetWindowTextW(notice_text, L"Stopping...");
-    return 1;
 }
 
 /* Starts the game and waits for it, as GameHub tracks this process. */

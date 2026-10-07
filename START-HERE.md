@@ -48,8 +48,9 @@ is not read-only. Never point Battle.net or an updater at this separate layout.
    - If the game is installed in more than one GameHub container (this can
      happen after reinstalling the game or the container), a note at the
      bottom says so. You always play from the copy in the container you
-     started from. **Remove other copy** deletes the other container's World
-     of Warcraft folder to free its storage, after asking you first.
+     started from. To free the other copy's storage, delete that container
+     in GameHub. Thor Forever does not delete it itself: from inside
+     GameHub, such a delete removed other files instead.
 2. Log in yourself, choose your controls and play briefly.
 3. Exit through **WoW's menu > Exit Game**, then reopen the launcher and check
    that your controls/settings remain selected.

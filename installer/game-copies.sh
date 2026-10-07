@@ -1,8 +1,10 @@
 #!/bin/sh
-# Functions only; needs discover-game.sh and stage-game.sh loaded first.
+# Functions only; needs discover-game.sh loaded first.
 # For when the game is installed in more than one GameHub container (GameHub
 # can make a new container and keep the old one's folder after a reinstall).
-# The start screen shows the extra copies and can remove one on request.
+# The start screen shows a note about the extra copies. It never deletes
+# them: on the device, a delete aimed at another container from inside
+# GameHub removed files elsewhere (Download/Thor-Forever/logs) instead.
 
 # tf_scan_copies USR CONTAINER OUT writes, through OUT.tmp, one line per copy
 # when there is more than one, or leftovers (and removes OUT otherwise):
@@ -61,128 +63,4 @@ tf_list_copies()
     done <<TF_LIST
 $TF_GAME_LIST
 TF_LIST
-}
-
-# tf_remove_copy USR CONTAINER NAME GAME deletes the World of Warcraft folder
-# (a copy or leftovers) in container NAME. Only when CONTAINER (this launch's
-# container) has a copy of its own, NAME is a different container, and the staged game
-# GAME (may be missing) no longer links into the copy being removed. Never
-# deletes anything outside <NAME>/drive_c/<Program Files>/World of Warcraft,
-# and never the container itself: GameHub manages those.
-tf_remove_copy() (
-    tf_usr=$1
-    tf_here=${2%/}
-    tf_name=$3
-    tf_game=$4
-    case "$tf_name" in ''|.|..|*/*) exit 2 ;; esac
-    [ -n "$tf_here" ] || exit 3
-    tf_discover_game "$tf_usr" "$tf_here" || exit 3
-    case "$TF_GAME_DIR" in "$tf_here/"*) ;; *) exit 3 ;; esac
-    tf_box="$tf_usr/home/virtual_containers/$tf_name"
-    [ "$tf_box" != "$tf_here" ] || exit 4
-    [ -d "$tf_box" ] && [ ! -L "$tf_box" ] || exit 5
-    if [ -d "$tf_game" ]; then
-        tf_follow_install "$TF_GAME_DIR" "$tf_game" || exit 6
-    fi
-    tf_found=0
-    for tf_programs in 'Program Files (x86)' 'Program Files'; do
-        tf_wow="$tf_box/drive_c/$tf_programs/World of Warcraft"
-        # Never through a link on the way there.
-        [ -d "$tf_wow" ] && [ ! -L "$tf_box/drive_c" ] && [ ! -L "$tf_box/drive_c/$tf_programs" ] &&
-            [ ! -L "$tf_wow" ] || continue
-        for tf_link in "$tf_game/../Data" "$tf_game/Data" "$tf_game/Interface"; do
-            [ -L "$tf_link" ] || continue
-            [ "$tf_link" -ef "$tf_wow/Data" ] || [ "$tf_link" -ef "$tf_wow/_classic_beta_/Data" ] ||
-                [ "$tf_link" -ef "$tf_wow/_classic_beta_/Interface" ] && exit 7
-        done
-        # Wine turns the Windows read-only flag into a folder without write
-        # permission, and rm cannot delete what is inside such a folder.
-        # So if the first try leaves files behind, make everything writable
-        # (it is all being deleted anyway) and try again.
-        /system/bin/toybox rm -rf "$tf_wow"
-        if [ -e "$tf_wow" ]; then
-            print -r -- 'Some files were left; making them writable and trying again.'
-            /system/bin/toybox chmod -R u+rwx "$tf_wow"
-            /system/bin/toybox rm -rf "$tf_wow"
-        fi
-        if [ -e "$tf_wow" ]; then
-            print -r -- "Could not delete everything in $tf_wow. Left over:"
-            /system/bin/toybox ls -la "$tf_wow" "$tf_wow/_classic_beta_"
-            print -r -- 'Running as, and the folders on the way:'
-            /system/bin/toybox id
-            /system/bin/toybox ls -ld "$tf_box" "$tf_box/drive_c" "$tf_box/drive_c/$tf_programs" "$tf_wow"
-            exit 8
-        fi
-        tf_found=1
-    done
-    [ "$tf_found" = 1 ] || exit 9
-    print -r -- "REMOVED: the game copy in container $tf_name."
-)
-
-# tf_copy_sizes USR OUT writes, through OUT.tmp, "SIZE <KiB> <name>" for each
-# OTHER copy listed in the file tf_scan_copies wrote (COPIES). Slow on a full
-# game, so the caller runs it in the background. du's output is read with
-# shell builtins and only number lines count: GameHub's process wrapper can
-# add its own text to an external command's output.
-tf_copy_sizes()
-{
-    tf_usr=$1
-    tf_copies=$2
-    tf_out=$3
-    : >"$tf_out.tmp" || return 1
-    while read -r tf_kind tf_name; do
-        [ "$tf_kind" = OTHER ] || [ "$tf_kind" = LEFTOVER ] || continue
-        tf_kb=0
-        for tf_programs in 'Program Files (x86)' 'Program Files'; do
-            tf_wow="$tf_usr/home/virtual_containers/$tf_name/drive_c/$tf_programs/World of Warcraft"
-            [ -d "$tf_wow" ] && [ ! -L "$tf_wow" ] || continue
-            /system/bin/toybox du -sk "$tf_wow" >"$tf_out.du" 2>/dev/null </dev/null
-            while read -r tf_size tf_rest; do
-                case "$tf_size" in ''|*[!0-9]*) continue ;; esac
-                tf_kb=$((tf_kb + tf_size))
-            done <"$tf_out.du"
-        done
-        print -r -- "SIZE $tf_kb $tf_name" >>"$tf_out.tmp"
-    done <"$tf_copies"
-    rm -f "$tf_out.du"
-    mv -f "$tf_out.tmp" "$tf_out"
-}
-
-# tf_kill_tree PID ends PID and every process started under it (a function
-# running in the background starts its commands as children). Reads /proc
-# with shell builtins only.
-tf_kill_tree()
-{
-    tf_tree=" $1 "
-    tf_more=1
-    while [ "$tf_more" = 1 ]; do
-        tf_more=0
-        for tf_proc in /proc/[0-9]*; do
-            tf_pid=${tf_proc##*/}
-            case "$tf_tree" in *" $tf_pid "*) continue ;; esac
-            tf_stat=
-            read -r tf_stat <"$tf_proc/stat" 2>/dev/null
-            # Fields after the command name: state, parent pid, ...
-            tf_stat=${tf_stat##*) }
-            set -f
-            set -- $tf_stat
-            set +f
-            case "$tf_tree" in *" ${2-none} "*) tf_tree="$tf_tree$tf_pid "; tf_more=1 ;; esac
-        done
-    done
-    for tf_pid in $tf_tree; do kill "$tf_pid" 2>/dev/null; done
-}
-
-# tf_free_kb DIR SCRATCH prints the free KiB on DIR's storage (0 if unknown).
-# Only number lines of df count, as GameHub can add its own text to them.
-tf_free_kb()
-{
-    /system/bin/toybox df -Pk "$1" >"$2" 2>/dev/null </dev/null
-    tf_kb=0
-    while read -r tf_fs tf_blocks tf_used tf_available tf_rest; do
-        case "$tf_available" in ''|*[!0-9]*) continue ;; esac
-        tf_kb=$tf_available
-    done <"$2"
-    rm -f "$2"
-    print -r -- "$tf_kb"
 }
