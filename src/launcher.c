@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 /* SPDX-License-Identifier: MIT
  * Start screen for Thor Forever: shows the installed game version, opens
@@ -136,7 +137,28 @@ static struct setting settings[] = {
 };
 #define SETTING_COUNT (int)(sizeof(settings) / sizeof(*settings))
 static char tuning[65536];
-static HFONT font, big_font;
+static HFONT font, label_font;
+static HBRUSH background_brush;
+static int header_height;
+
+/* Colours of the start screen, after World of Warcraft: Forever: deep sky
+ * blue, light sky, cream, the teal of its logo and gold trim (colours only;
+ * no game artwork is used). Headings and buttons use Cinzel (fonts/, SIL
+ * Open Font License, notices/CINZEL-OFL.txt), a free Roman-capitals font. */
+#define TF_BACKGROUND RGB(16, 38, 59)
+#define TF_HEADER_TOP RGB(65, 110, 151)
+#define TF_CREAM RGB(243, 238, 226)
+#define TF_SKY RGB(169, 207, 231)
+#define TF_SKY_DARK RGB(131, 176, 206)
+#define TF_EDGE RGB(65, 110, 151)
+#define TF_TEXT RGB(211, 230, 243)
+#define TF_TEAL RGB(52, 186, 215)
+#define TF_TEAL_DARK RGB(32, 129, 165)
+#define TF_WARNING RGB(224, 163, 53)
+#define TF_GOLD RGB(201, 168, 106)
+#define TF_GOLD_LIGHT RGB(241, 228, 194)
+
+static HFONT button_font;
 static int bnet_started, menu_width, menu_height, notice_height;
 static wchar_t notice_buffer[1024];
 static void refresh_copies(void);
@@ -423,6 +445,340 @@ static void refresh(void)
     if (!refresh_install()) refresh_copies();
 }
 
+/* Vertical gradient, one line at a time (no extra library needed). */
+static void fill_gradient(HDC dc, const RECT *r, COLORREF top, COLORREF bottom)
+{
+    int y, h = r->bottom - r->top;
+    for (y = 0; y < h; ++y) {
+        int f = h > 1 ? y * 256 / (h - 1) : 0;
+        RECT line = { r->left, r->top + y, r->right, r->top + y + 1 };
+        HBRUSH brush = CreateSolidBrush(RGB(
+            (GetRValue(top) * (256 - f) + GetRValue(bottom) * f) / 256,
+            (GetGValue(top) * (256 - f) + GetGValue(bottom) * f) / 256,
+            (GetBValue(top) * (256 - f) + GetBValue(bottom) * f) / 256));
+        FillRect(dc, &line, brush);
+        DeleteObject(brush);
+    }
+}
+
+static void frame(HDC dc, RECT r, COLORREF color)
+{
+    HBRUSH brush = CreateSolidBrush(color);
+    FrameRect(dc, &r, brush);
+    DeleteObject(brush);
+}
+
+/* The header is drawn SCALE times larger and then shrunk, which smooths
+ * the letter outlines and the infinity swash (GDI itself draws them with
+ * hard, stair-stepped edges). It is drawn once and kept in header_cache. */
+#define SCALE 3
+static HBITMAP header_cache;
+static int unit;
+static const wchar_t *heading_face = L"Tahoma";
+
+/* A word in the style of the game's logo, centred on cx, cy: a metal
+ * gradient (top, middle, bottom colours) with a dark bronze outline and a
+ * soft shadow. */
+/* Fills region grown by radius (copies shifted around circles), shifted
+ * down by drop: an outline that only follows the letters' outer edges. */
+static void grown_region(HDC dc, HRGN region, int radius, int drop, COLORREF color)
+{
+    HBRUSH brush = CreateSolidBrush(color);
+    HRGN copy = CreateRectRgn(0, 0, 0, 0);
+    int ring, step;
+    for (ring = 1; ring <= 3; ++ring)
+        for (step = 0; step < 24; ++step) {
+            double angle = 6.283185307 * step / 24;
+            int dx = (int)(radius * ring / 3.0 * cos(angle)), dy = (int)(radius * ring / 3.0 * sin(angle));
+            CombineRgn(copy, region, NULL, RGN_COPY);
+            OffsetRgn(copy, dx, dy + drop);
+            FillRgn(dc, copy, brush);
+        }
+    DeleteObject(copy);
+    DeleteObject(brush);
+}
+
+static void logo_word(HDC dc, const wchar_t *word, int cx, int cy, const COLORREF metal[3])
+{
+    int length = (int)wcslen(word), x, y;
+    SIZE size;
+    HRGN region;
+    RECT fill;
+    GetTextExtentPoint32W(dc, word, length, &size);
+    x = cx - size.cx / 2;
+    y = cy - size.cy / 2;
+    /* WINDING: overlapping parts of a letter stay filled instead of
+     * cancelling out into holes. */
+    SetPolyFillMode(dc, WINDING);
+    BeginPath(dc);
+    TextOutW(dc, x, y, word, length);
+    EndPath(dc);
+    region = PathToRegion(dc);
+    if (!region) return;
+    grown_region(dc, region, 3 * SCALE, 2 * SCALE, RGB(10, 22, 34));
+    grown_region(dc, region, 5 * SCALE / 2, 0, RGB(138, 102, 52));
+    grown_region(dc, region, 3 * SCALE / 2, 0, RGB(42, 26, 12));
+    SelectClipRgn(dc, region);
+    fill.left = x;
+    fill.right = x + size.cx;
+    fill.top = y;
+    fill.bottom = y + size.cy / 2;
+    fill_gradient(dc, &fill, metal[0], metal[1]);
+    fill.top = fill.bottom;
+    fill.bottom = y + size.cy;
+    fill_gradient(dc, &fill, metal[1], metal[2]);
+    SelectClipRgn(dc, NULL);
+    DeleteObject(region);
+}
+
+/* A round dot of radius r at x, y. */
+static void dot(HDC dc, double x, double y, double r)
+{
+    Ellipse(dc, (int)(x - r), (int)(y - r), (int)(x + r + 1), (int)(y + r + 1));
+}
+
+/* The infinity sign under FOREVER: calligraphic (thin where the strokes
+ * cross, full on the loops), in the same silvery white as FOREVER, with a
+ * dark edge. The lines to its sides are added by swash_tails. */
+static void swash(HDC dc, int cx, int cy, int half_width, int thickness)
+{
+    static const COLORREF colors[3] = { RGB(8, 22, 34), RGB(214, 210, 200), RGB(255, 255, 255) };
+    int pass, i, steps = 1600;
+    HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+    for (pass = 0; pass < 3; ++pass) {
+        HBRUSH brush = CreateSolidBrush(colors[pass]);
+        HGDIOBJ old_brush = SelectObject(dc, brush);
+        double grow = pass == 0 ? 1.5 * SCALE : 0, shrink = pass == 2 ? 0.35 : 1, lift = pass == 2 ? 0.35 : 0;
+        for (i = 0; i < steps; ++i) {
+            double a = 6.283185307 * i / steps, s = sin(a), c = cos(a), d = 1 + s * s;
+            double x = cx + half_width * c / d, y = cy + half_width * 1.1 * s * c / d;
+            double r = thickness * (0.3 + 0.7 * fabs(c));
+            dot(dc, x, y - r * lift, r * shrink + grow);
+        }
+        SelectObject(dc, old_brush);
+        DeleteObject(brush);
+    }
+    SelectObject(dc, old_pen);
+}
+
+/* Share of the pixel row [y, y + 1] covered by [top, bottom]. */
+static double cover(int y, double top, double bottom)
+{
+    double a = top > y ? top : y, b = bottom < y + 1 ? bottom : y + 1;
+    return b > a ? b - a : 0;
+}
+
+static void blend(unsigned char *p, COLORREF color, double amount)
+{
+    if (amount <= 0) return;
+    if (amount > 1) amount = 1;
+    p[0] = (unsigned char)(p[0] + (GetBValue(color) - p[0]) * amount);
+    p[1] = (unsigned char)(p[1] + (GetGValue(color) - p[1]) * amount);
+    p[2] = (unsigned char)(p[2] + (GetRValue(color) - p[2]) * amount);
+}
+
+/* The lines left and right of the infinity sign, drawn straight into the
+ * finished w-pixel-wide header with exact coverage per pixel, so they
+ * taper smoothly to a sharp point: from start pixels off the centre cx,
+ * length pixels long, half as thick as r0 at the start, around row cy. */
+static void swash_tails(unsigned char *bits, int w, int h, double cx, double cy, double start,
+                        double length, double r0)
+{
+    int side, x, y;
+    for (side = -1; side <= 1; side += 2)
+        for (x = 0; x < w; ++x) {
+            double off = side * (x + 0.5 - cx) - start, f, r, edge;
+            if (off < 0 || off > length) continue;
+            f = off / length;
+            r = r0 * pow(1 - f, 1.4);
+            edge = 0.7 * (1 - f);
+            for (y = (int)(cy - r - 2); y <= (int)(cy + r + 2); ++y) {
+                unsigned char *p;
+                if (y < 0 || y >= h) continue;
+                p = bits + 4 * ((size_t)y * w + x);
+                blend(p, RGB(8, 22, 34), cover(y, cy - r - edge, cy + r + edge) * 0.8);
+                blend(p, RGB(226, 222, 212), cover(y, cy - r, cy + r));
+            }
+        }
+}
+
+/* Draws the header (background, WORLD OF WARCRAFT, FOREVER, swash) at
+ * SCALE and shrinks it to w by h, averaging each SCALE x SCALE block. */
+static HBITMAP make_header(HDC screen, int w, int h)
+{
+    BITMAPINFO info = {0};
+    unsigned char *big_bits, *bits;
+    HDC dc = CreateCompatibleDC(screen);
+    HBITMAP big, small;
+    HGDIOBJ old;
+    HFONT title, forever;
+    RECT all = { 0, 0, w * SCALE, h * SCALE };
+    int x, y, bx, by, u = unit * SCALE;
+    info.bmiHeader.biSize = sizeof(info.bmiHeader);
+    info.bmiHeader.biWidth = w * SCALE;
+    info.bmiHeader.biHeight = -h * SCALE;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    big = CreateDIBSection(screen, &info, DIB_RGB_COLORS, (void **)&big_bits, NULL, 0);
+    info.bmiHeader.biWidth = w;
+    info.bmiHeader.biHeight = -h;
+    small = CreateDIBSection(screen, &info, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
+    if (!dc || !big || !small) {
+        if (big) DeleteObject(big);
+        if (small) DeleteObject(small);
+        if (dc) DeleteDC(dc);
+        return NULL;
+    }
+    old = SelectObject(dc, big);
+    fill_gradient(dc, &all, TF_HEADER_TOP, TF_BACKGROUND);
+    SetBkMode(dc, TRANSPARENT);
+    title = CreateFontW(-u * 21 / 20, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                        ANTIALIASED_QUALITY, 0, heading_face);
+    forever = CreateFontW(-u * 31 / 20, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                          ANTIALIASED_QUALITY, 0, heading_face);
+    {
+        /* Champagne gold like "Warcraft" in the logo, silvery white like its
+         * "Forever". */
+        static const COLORREF gold[3] = { RGB(255, 253, 242), RGB(241, 228, 194), RGB(176, 140, 84) };
+        static const COLORREF white[3] = { RGB(255, 255, 255), RGB(244, 242, 236), RGB(184, 180, 170) };
+        SelectObject(dc, title);
+        SetTextCharacterExtra(dc, u / 12);
+        logo_word(dc, L"WORLD OF WARCRAFT", w * SCALE / 2, u, gold);
+        SelectObject(dc, forever);
+        SetTextCharacterExtra(dc, u / 8);
+        logo_word(dc, L"FOREVER", w * SCALE / 2, u * 46 / 20, white);
+        /* "on the AYN Thor" right of FOREVER, on its baseline. */
+        {
+            SIZE word, small;
+            HFONT device = CreateFontW(-u / 2, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                                       ANTIALIASED_QUALITY, 0, heading_face);
+            TEXTMETRICW big_metrics, small_metrics;
+            int x0, base;
+            GetTextExtentPoint32W(dc, L"FOREVER", 7, &word);
+            GetTextMetricsW(dc, &big_metrics);
+            base = u * 46 / 20 - word.cy / 2 + big_metrics.tmAscent;
+            x0 = w * SCALE / 2 + word.cx / 2 + u / 3;
+            SetTextCharacterExtra(dc, u / 40);
+            SelectObject(dc, device);
+            GetTextMetricsW(dc, &small_metrics);
+            GetTextExtentPoint32W(dc, L"on the AYN Thor", 15, &small);
+            SetTextColor(dc, RGB(10, 22, 34));
+            TextOutW(dc, x0 + SCALE, base - small_metrics.tmAscent + SCALE, L"on the AYN Thor", 15);
+            SetTextColor(dc, TF_SKY);
+            TextOutW(dc, x0, base - small_metrics.tmAscent, L"on the AYN Thor", 15);
+            SelectObject(dc, forever);
+            DeleteObject(device);
+        }
+        SetTextCharacterExtra(dc, 0);
+    }
+    swash(dc, w * SCALE / 2, u * 7 / 2, u * 6 / 5, u / 22);
+    SelectObject(dc, old);
+    DeleteObject(title);
+    DeleteObject(forever);
+    DeleteDC(dc);
+    GdiFlush();
+    for (y = 0; y < h; ++y)
+        for (x = 0; x < w; ++x) {
+            unsigned sum[3] = { 0, 0, 0 };
+            for (by = 0; by < SCALE; ++by)
+                for (bx = 0; bx < SCALE; ++bx) {
+                    const unsigned char *p = big_bits + 4 * ((size_t)(y * SCALE + by) * w * SCALE + x * SCALE + bx);
+                    sum[0] += p[0];
+                    sum[1] += p[1];
+                    sum[2] += p[2];
+                }
+            bits[4 * ((size_t)y * w + x)] = (unsigned char)(sum[0] / (SCALE * SCALE));
+            bits[4 * ((size_t)y * w + x) + 1] = (unsigned char)(sum[1] / (SCALE * SCALE));
+            bits[4 * ((size_t)y * w + x) + 2] = (unsigned char)(sum[2] / (SCALE * SCALE));
+        }
+    DeleteObject(big);
+    swash_tails(bits, w, h, w / 2.0, unit * 7 / 2.0, unit * 6 / 5.0 + unit / 10.0, unit * 2.4, unit / 22.0 * 1.2);
+    return small;
+}
+
+/* Background, frame and the header. */
+static void paint_menu(HWND window)
+{
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(window, &ps);
+    RECT client;
+    GetClientRect(window, &client);
+    FillRect(dc, &client, background_brush);
+    if (!header_cache) header_cache = make_header(dc, client.right, header_height);
+    if (header_cache) {
+        HDC source = CreateCompatibleDC(dc);
+        HGDIOBJ old = SelectObject(source, header_cache);
+        BitBlt(dc, 0, 0, client.right, header_height, source, 0, 0, SRCCOPY);
+        SelectObject(source, old);
+        DeleteDC(source);
+    }
+    frame(dc, client, TF_GOLD);
+    InflateRect(&client, -1, -1);
+    frame(dc, client, RGB(74, 52, 24));
+    InflateRect(&client, -3, -3);
+    frame(dc, client, TF_SKY_DARK);
+    EndPaint(window, &ps);
+}
+
+/* Buttons: Play in the teal of the Forever logo, the others in deep blue.
+ * The three setting buttons show their name small and the value in light
+ * sky blue. */
+static void draw_button(const DRAWITEMSTRUCT *d)
+{
+    HDC dc = d->hDC;
+    RECT r = d->rcItem, inner;
+    wchar_t text[160], *colon;
+    int play = d->hwndItem == play_button, i, setting = 0;
+    int pressed = d->itemState & ODS_SELECTED, disabled = d->itemState & ODS_DISABLED;
+    int focus = d->itemState & ODS_FOCUS;
+    COLORREF top, bottom, edge, ink;
+    for (i = 0; i < SETTING_COUNT; ++i) if (d->hwndItem == settings[i].button) setting = 1;
+    if (disabled) {
+        top = RGB(44, 58, 72); bottom = RGB(34, 46, 58); edge = RGB(70, 88, 106); ink = RGB(128, 146, 162);
+    } else if (play) {
+        top = TF_TEAL; bottom = TF_TEAL_DARK; edge = TF_GOLD; ink = RGB(255, 255, 255);
+    } else {
+        top = RGB(37, 70, 102); bottom = RGB(22, 48, 73); edge = TF_EDGE; ink = TF_TEXT;
+    }
+    if (pressed) { COLORREF swap = top; top = bottom; bottom = swap; }
+    if (focus && !disabled) edge = TF_GOLD_LIGHT;
+    fill_gradient(dc, &r, top, bottom);
+    frame(dc, r, edge);
+    inner = r;
+    InflateRect(&inner, -1, -1);
+    frame(dc, inner, RGB(9, 24, 38));
+    if (pressed) OffsetRect(&r, 1, 1);
+    GetWindowTextW(d->hwndItem, text, 160);
+    SetBkMode(dc, TRANSPARENT);
+    colon = setting ? wcschr(text, L':') : NULL;
+    if (colon) {
+        RECT label = r, value = r;
+        *colon = 0;
+        label.bottom = r.top + (r.bottom - r.top) * 9 / 20;
+        value.top = label.bottom;
+        value.bottom = r.bottom - (r.bottom - r.top) / 10;
+        SelectObject(dc, label_font);
+        SetTextColor(dc, disabled ? ink : TF_SKY);
+        DrawTextW(dc, text, -1, &label, DT_CENTER | DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(dc, button_font);
+        SetTextColor(dc, disabled ? ink : TF_GOLD_LIGHT);
+        DrawTextW(dc, colon[1] == L' ' ? colon + 2 : colon + 1, -1, &value,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    } else {
+        RECT measure = r;
+        int height;
+        SelectObject(dc, button_font);
+        SetTextColor(dc, ink);
+        InflateRect(&measure, -4, 0);
+        height = DrawTextW(dc, text, -1, &measure, DT_CENTER | DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX);
+        measure.left = r.left + 4;
+        measure.right = r.right - 4;
+        measure.top = r.top + (r.bottom - r.top - height) / 2;
+        measure.bottom = measure.top + height;
+        DrawTextW(dc, text, -1, &measure, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+    }
+}
+
 static HWND add_control(HWND parent, const wchar_t *cls, const wchar_t *text, DWORD style,
                         int x, int y, int w, int h, int id, HFONT f)
 {
@@ -477,6 +833,21 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_TIMER:
         refresh();
         return 0;
+    case WM_PAINT:
+        paint_menu(window);
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_DRAWITEM:
+        draw_button((const DRAWITEMSTRUCT *)lparam);
+        return TRUE;
+    case WM_CTLCOLORSTATIC: {
+        HDC dc = (HDC)wparam;
+        HWND control = (HWND)lparam;
+        SetTextColor(dc, control == notice_text ? TF_WARNING : control == version_text ? TF_GOLD_LIGHT : TF_TEXT);
+        SetBkColor(dc, TF_BACKGROUND);
+        return (LRESULT)background_brush;
+    }
     case WM_CLOSE:
         if (!quit_while_installing(window)) return 0;
         DestroyWindow(window);
@@ -493,22 +864,31 @@ static int show_menu(HINSTANCE instance)
     MSG msg;
     HWND window;
     int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
-    int u = sh / 24, w = sw * 3 / 5, h, x = u, y = u, bw, i;
+    int u = sh / 24, w = sw * 3 / 5, h, x = u, y = u, bw, bh, i;
     if (u < 16) u = 16;
     if (w < 24 * u) w = 24 * u < sw ? 24 * u : sw;
-    h = 15 * u;
+    header_height = u * 17 / 4;
+    h = header_height + u * 11;
+    /* Cinzel from fonts/, for this program only; Tahoma when it is missing. */
+    if (AddFontResourceExW(in_kit(L"\\fonts\\Cinzel-Bold.ttf"), FR_PRIVATE, 0)) heading_face = L"Cinzel";
+    unit = u;
+    button_font = CreateFontW(-u * 2 / 3, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                              ANTIALIASED_QUALITY, 0, heading_face);
+    label_font = CreateFontW(-u / 2, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                             ANTIALIASED_QUALITY, 0, heading_face);
+    background_brush = CreateSolidBrush(TF_BACKGROUND);
     font = CreateFontW(-u * 2 / 3, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                        CLEARTYPE_QUALITY, 0, L"Tahoma");
-    big_font = CreateFontW(-u, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
-                           CLEARTYPE_QUALITY, 0, L"Tahoma");
     wc.lpfnWndProc = window_proc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hbrBackground = background_brush;
+    /* Repaint everything when the window grows for the note. */
+    wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpszClassName = L"ThorForeverMenu";
     RegisterClassW(&wc);
     window = CreateWindowExW(WS_EX_APPWINDOW, wc.lpszClassName, L"Thor Forever",
-                             WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                             WS_POPUP | WS_SYSMENU,
                              (sw - w) / 2, (sh - h) / 2, w, h, NULL, NULL, instance, NULL);
     menu_window = window;
     menu_width = w;
@@ -519,29 +899,29 @@ static int show_menu(HINSTANCE instance)
         GetClientRect(window, &client);
         w = client.right;
     }
-    add_control(window, L"STATIC", L"World of Warcraft on the AYN Thor", SS_LEFT,
-                x, y, w - 2 * u, u * 3 / 2, 0, big_font);
-    y += u * 2;
+    y = header_height + u / 2;
     version_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u, 0, font);
     y += u;
     status_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u * 2, 0, font);
     y += u * 3;
+    /* All six buttons share one size and style; Play is the teal one. */
     bw = (w - 4 * u) / 3;
+    bh = u * 5 / 2;
     if (!read_text(in_kit(L"\\tuning.conf"), tuning, sizeof(tuning))) tuning[0] = 0;
     for (i = 0; i < SETTING_COUNT; ++i) {
-        settings[i].button = add_control(window, L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP,
-                                         x + i * (bw + u), y, bw, u * 2, ID_SETTING + i, font);
+        settings[i].button = add_control(window, L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP,
+                                         x + i * (bw + u), y, bw, bh, ID_SETTING + i, font);
         show_setting(&settings[i]);
     }
-    y += u * 3;
-    play_button = add_control(window, L"BUTTON", L"Play", BS_DEFPUSHBUTTON | WS_TABSTOP,
-                              x, y, bw, u * 3, ID_PLAY, big_font);
-    add_control(window, L"BUTTON", L"Update with\nBattle.net", BS_PUSHBUTTON | BS_MULTILINE | WS_TABSTOP,
-                x + bw + u, y, bw, u * 3, ID_UPDATE, font);
-    add_control(window, L"BUTTON", L"Quit", BS_PUSHBUTTON | WS_TABSTOP,
-                x + 2 * (bw + u), y, bw, u * 3, ID_QUIT, font);
+    y += bh + u / 2;
+    play_button = add_control(window, L"BUTTON", L"Play", BS_OWNERDRAW | WS_TABSTOP,
+                              x, y, bw, bh, ID_PLAY, button_font);
+    add_control(window, L"BUTTON", L"Update with Battle.net", BS_OWNERDRAW | WS_TABSTOP,
+                x + bw + u, y, bw, bh, ID_UPDATE, button_font);
+    add_control(window, L"BUTTON", L"Quit", BS_OWNERDRAW | WS_TABSTOP,
+                x + 2 * (bw + u), y, bw, bh, ID_QUIT, button_font);
     /* Shown only when the game is installed in more than one container. */
-    y += u * 4;
+    y += bh + u;
     notice_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u * 4, 0, font);
     ShowWindow(notice_text, SW_HIDE);
     refresh();
@@ -555,7 +935,11 @@ static int show_menu(HINSTANCE instance)
         DispatchMessageW(&msg);
     }
     DeleteObject(font);
-    DeleteObject(big_font);
+    DeleteObject(label_font);
+    if (header_cache) DeleteObject(header_cache);
+    header_cache = NULL;
+    DeleteObject(button_font);
+    DeleteObject(background_brush);
     return (int)msg.wParam;
 }
 

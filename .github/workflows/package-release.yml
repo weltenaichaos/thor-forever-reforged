@@ -2,7 +2,7 @@
 # the installer and everything it installs, so nothing else has to be
 # fetched by hand. It contains:
 #   - Thor-Forever.exe, built here from src/launcher.c
-#   - installer/, tuning.conf, START-HERE.md, docs, notices, licenses
+#   - installer/, tuning.conf, START-HERE.md, docs, notices, licenses, fonts/
 #   - payload/: the seven pinned install files from the original kit's
 #     release (AeroNico/thor-forever), checked against
 #     installer/verify-payload.sh
@@ -130,6 +130,7 @@ jobs:
           cp docs/TUNING.md docs/PERFORMANCE.md docs/TROUBLESHOOTING.md docs/RECOVERY.md "$KIT/docs/"
           cp tools/analyze-*.py "$KIT/tools/"
           cp -R notices "$KIT/notices"
+          mkdir -p "$KIT/fonts" && cp fonts/Cinzel-Bold.ttf "$KIT/fonts/"
           (cd "$KIT" && find . -type f ! -name SHA256SUMS.txt | sort | sed 's|^\./||' |
             xargs -d '\n' sha256sum > SHA256SUMS.txt)
           cat "$KIT/SHA256SUMS.txt"
