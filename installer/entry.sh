@@ -40,7 +40,10 @@ if [ "${2-}" = wait ]; then
         read -r tf_up _ </proc/uptime
         if [ -e "$tf_at.quit" ] || [ "${tf_up%%.*}" -ge "$tf_end" ]; then
             [ -z "$tf_sizer" ] || kill "$tf_sizer" 2>/dev/null
-            rm -f "$tf_at".*
+            # The .log stays for diagnosis; the next launch cleans it up.
+            for tf_file in "$tf_at".*; do
+                [ "$tf_file" = "$tf_at.log" ] || rm -f "$tf_file"
+            done
             exit 0
         fi
         if [ "$tf_copies" = 1 ] && [ -e "$tf_at.remove" ]; then

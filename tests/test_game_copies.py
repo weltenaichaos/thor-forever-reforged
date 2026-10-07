@@ -91,6 +91,22 @@ class GameCopiesTests(unittest.TestCase):
         self.assertEqual((game.parent / 'Data').resolve(), (here / 'Data').resolve())
         self.assertEqual((game / 'Interface').resolve(), (here / '_classic_beta_/Interface').resolve())
 
+    def test_removes_read_only_folders(self):
+        # Wine maps the Windows read-only flag to folders without write
+        # permission; rm alone cannot empty those when not running as root.
+        self.add_game('a')
+        other = self.add_game('b')
+        (other / 'Data').chmod(0o555)
+        (other / '_classic_beta_').chmod(0o555)
+        try:
+            self.assertEqual(self.remove('a', 'b'), 0)
+            self.assertFalse(other.exists())
+        finally:
+            if other.exists():
+                for path in [other, *other.rglob('*')]:
+                    if path.is_dir():
+                        path.chmod(0o755)
+
     def test_never_removes_this_containers_copy(self):
         here = self.add_game('a')
         self.add_game('b')

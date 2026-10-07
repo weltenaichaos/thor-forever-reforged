@@ -67,8 +67,21 @@ $tf_wow/_classic_beta_
             [ "$tf_link" -ef "$tf_wow/Data" ] || [ "$tf_link" -ef "$tf_wow/_classic_beta_/Data" ] ||
                 [ "$tf_link" -ef "$tf_wow/_classic_beta_/Interface" ] && exit 7
         done
-        /system/bin/toybox rm -rf "$tf_wow" || exit 8
-        [ ! -e "$tf_wow" ] || exit 8
+        # Wine turns the Windows read-only flag into a folder without write
+        # permission, and rm cannot delete what is inside such a folder.
+        # So if the first try leaves files behind, make everything writable
+        # (it is all being deleted anyway) and try again.
+        /system/bin/toybox rm -rf "$tf_wow"
+        if [ -e "$tf_wow" ]; then
+            print -r -- 'Some files were left; making them writable and trying again.'
+            /system/bin/toybox chmod -R u+rwx "$tf_wow"
+            /system/bin/toybox rm -rf "$tf_wow"
+        fi
+        if [ -e "$tf_wow" ]; then
+            print -r -- "Could not delete everything in $tf_wow. Left over:"
+            /system/bin/toybox ls -la "$tf_wow" "$tf_wow/_classic_beta_"
+            exit 8
+        fi
         tf_found=1
     done
     [ "$tf_found" = 1 ] || exit 9
