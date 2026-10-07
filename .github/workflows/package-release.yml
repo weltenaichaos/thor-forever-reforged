@@ -1,0 +1,164 @@
+# Builds the complete download for players: one zip with the start screen,
+# the installer and everything it installs, so nothing else has to be
+# fetched by hand. It contains:
+#   - Thor-Forever.exe, built here from src/launcher.c
+#   - installer/, tuning.conf, START-HERE.md, docs, notices, licenses
+#   - payload/: the seven pinned install files from the original kit's
+#     release (AeroNico/thor-forever), checked against
+#     installer/verify-payload.sh
+#   - driver-test/, dxvk-test/, wine-test/: this repository's builds, taken
+#     from the workflow runs given below
+# The zip is a workflow artifact and goes into a DRAFT pre-release, which
+# only becomes public when someone publishes it on GitHub.
+name: Package release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag for the draft release, e.g. v0.3.0-reforged.1'
+        required: true
+      upstream_tag:
+        description: 'Release of AeroNico/thor-forever to take payload/ from (empty = latest)'
+        default: ''
+      turnip_run:
+        description: 'Build Turnip run with the driver'
+        default: '37196986252'
+      turnip_artifact:
+        default: 'turnip-mesa-26.2.3-cache'
+      dxvk_run:
+        description: 'Build DXVK run with dxgi.dll and d3d11.dll'
+        default: '37229375147'
+      dxvk_artifact:
+        default: 'dxvk-2.6.2-thor-arm64'
+      wine_run:
+        description: 'Build Wine run with ntdll'
+        default: '37229375193'
+      wine_artifact:
+        default: 'wine-ntdll-esync-fix'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    env:
+      LLVM_MINGW: llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64
+      GH_TOKEN: ${{ github.token }}
+      KIT: out/Thor-Forever
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          [[ "$TAG" =~ ^v[0-9][0-9A-Za-z.-]*$ ]] || { echo "Unusable tag: $TAG"; exit 1; }
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Build the start screen
+        run: |
+          curl -fsSL -o llvm-mingw.tar.xz \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/${LLVM_MINGW}.tar.xz"
+          tar -xf llvm-mingw.tar.xz
+          mkdir -p "$KIT"
+          "${LLVM_MINGW}/bin/aarch64-w64-mingw32-clang" -O2 -Wall -Wextra -Werror -municode -mwindows \
+            src/launcher.c -o "$KIT/Thor-Forever.exe" -luser32 -lgdi32
+
+      - name: Take payload/ from the original kit
+        env:
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          mkdir upstream
+          gh release download ${UPSTREAM_TAG:+"$UPSTREAM_TAG"} --repo AeroNico/thor-forever \
+            --pattern '*.zip' --dir upstream
+          ls -l upstream
+          for zip in upstream/*.zip; do unzip -q "$zip" -d upstream/unpacked; done
+          payload=$(dirname "$(find upstream/unpacked -name wine-runtime.tar -path '*/payload/*' | head -n 1)")
+          [ -d "$payload" ] || { echo 'No payload/ folder in the original kit'; exit 1; }
+          mkdir -p "$KIT/payload"
+          # Only the seven files installer/verify-payload.sh pins, checked below.
+          python3 - "$payload" "$KIT/payload" <<'EOF'
+          import hashlib, re, shutil, sys
+          from pathlib import Path
+          source, dest = map(Path, sys.argv[1:])
+          pins = re.findall(r'^([a-f0-9]{64}) ([^\s]+)$', Path('installer/verify-payload.sh').read_text(), re.M)
+          assert len(pins) == 7, pins
+          for digest, name in pins:
+              actual = hashlib.sha256((source / name).read_bytes()).hexdigest()
+              if actual != digest:
+                  sys.exit(f'{name}: sha256 {actual}, expected {digest}')
+              shutil.copy2(source / name, dest / name)
+              print('OK', name)
+          EOF
+
+      - name: Take this repository's driver, DXVK and Wine builds
+        env:
+          TURNIP_RUN: ${{ inputs.turnip_run }}
+          TURNIP_ARTIFACT: ${{ inputs.turnip_artifact }}
+          DXVK_RUN: ${{ inputs.dxvk_run }}
+          DXVK_ARTIFACT: ${{ inputs.dxvk_artifact }}
+          WINE_RUN: ${{ inputs.wine_run }}
+          WINE_ARTIFACT: ${{ inputs.wine_artifact }}
+        run: |
+          take() {  # run artifact destination file...
+            local run=$1 artifact=$2 dest=$3 file found
+            shift 3
+            rm -rf "comp/$artifact"
+            gh run download "$run" --repo "$GITHUB_REPOSITORY" --name "$artifact" --dir "comp/$artifact"
+            mkdir -p "$KIT/$dest"
+            for file in "$@"; do
+              found=$(find "comp/$artifact" -name "$file" -type f | head -n 1)
+              [ -n "$found" ] || { echo "$artifact has no $file"; exit 1; }
+              cp "$found" "$KIT/$dest/$file"
+            done
+          }
+          take "$TURNIP_RUN" "$TURNIP_ARTIFACT" driver-test libvulkan_freedreno.so
+          take "$DXVK_RUN" "$DXVK_ARTIFACT" dxvk-test dxgi.dll d3d11.dll
+          take "$WINE_RUN" "$WINE_ARTIFACT" wine-test ntdll.so
+          # ntdll.dll is optional (launch-game.sh swaps it in when present).
+          found=$(find "comp/$WINE_ARTIFACT" -name ntdll.dll -type f | head -n 1)
+          [ -z "$found" ] || cp "$found" "$KIT/wine-test/ntdll.dll"
+
+      - name: Add the kit files
+        run: |
+          cp Install-Thor-Forever.cmd START-HERE.md LICENSE LICENSING.md tuning.conf "$KIT/"
+          mkdir -p "$KIT/installer" "$KIT/docs" "$KIT/tools"
+          cp installer/*.sh installer/*.cmd installer/*.wtf installer/README.md "$KIT/installer/"
+          cp docs/TUNING.md docs/PERFORMANCE.md docs/TROUBLESHOOTING.md docs/RECOVERY.md "$KIT/docs/"
+          cp tools/analyze-*.py "$KIT/tools/"
+          cp -R notices "$KIT/notices"
+          (cd "$KIT" && find . -type f ! -name SHA256SUMS.txt | sort | sed 's|^\./||' |
+            xargs -d '\n' sha256sum > SHA256SUMS.txt)
+          cat "$KIT/SHA256SUMS.txt"
+
+      - name: Zip
+        run: |
+          # One top folder, so extracting into Download/ gives Download/Thor-Forever.
+          (cd out && zip -qr -9 "../Thor-Forever-Reforged-$TAG.zip" Thor-Forever)
+          unzip -tq "Thor-Forever-Reforged-$TAG.zip"
+          ls -l "Thor-Forever-Reforged-$TAG.zip"
+          sha256sum "Thor-Forever-Reforged-$TAG.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Thor-Forever-Reforged-${{ inputs.tag }}
+          path: Thor-Forever-Reforged-${{ inputs.tag }}.zip
+          compression-level: 0
+
+      - name: Draft pre-release
+        run: |
+          cat > notes.md <<EOF
+          Complete download: everything needed is in **Thor-Forever-Reforged-$TAG.zip**.
+
+          1. Install World of Warcraft (Forever beta, ARM64) in a GameHub Lite container through Battle.net, as usual.
+          2. Extract the zip into your **Download** folder, so that you get **Download/Thor-Forever**.
+          3. In GameHub, set this container's **Startup File Path** to **Download/Thor-Forever/Thor-Forever.exe** and press Play.
+          4. The start screen says Thor Forever is not installed yet. Press **Install** and wait a few minutes. Then press **Play**.
+
+          Details: START-HERE.md in the zip. Built from $GITHUB_SHA by the Package release workflow.
+          EOF
+          gh release create "$TAG" "Thor-Forever-Reforged-$TAG.zip" --repo "$GITHUB_REPOSITORY" \
+            --draft --prerelease --target "$GITHUB_SHA" --title "Thor Forever Reforged $TAG" --notes-file notes.md
