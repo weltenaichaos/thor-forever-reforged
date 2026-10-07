@@ -82,6 +82,35 @@ tf_refresh_game() (
     cmp -s "$tf_source/WowB-ARM64.exe" "$tf_game/WowB-ARM64.exe" || exit 59
 )
 
+# After the game was reinstalled into another GameHub container, the staged
+# game's links to Data and Interface still point into the old container
+# (or nowhere, once it is deleted). Point them at the installation found
+# now. Only links are changed; real folders are never touched. Prints what
+# it changed.
+tf_follow_install() (
+    tf_source=$1
+    tf_game=$2
+    tf_stage=${tf_game%/*}
+    tf_relink() {
+        # $1 = link in the staged game, $2 = folder it should point to
+        [ -L "$1" ] || return 0
+        [ "$1" -ef "$2" ] && return 0
+        [ -d "$2" ] && [ ! -L "$2" ] || return 1
+        rm -f "$1" && ln -s "$2" "$1" || return 1
+        print -r -- "RELINKED: ${1##*/} now uses the installation in this container."
+    }
+    if [ -L "$tf_stage/Data" ]; then
+        tf_relink "$tf_stage/Data" "$tf_source/../Data" || exit 90
+    elif [ -L "$tf_game/Data" ]; then
+        tf_relink "$tf_game/Data" "$tf_source/Data" || exit 90
+    fi
+    # A fresh installation has no Interface folder yet.
+    if [ -L "$tf_game/Interface" ] && [ ! -e "$tf_source/Interface" ] && [ ! -L "$tf_source/Interface" ]; then
+        mkdir -p "$tf_source/Interface/AddOns" || exit 91
+    fi
+    tf_relink "$tf_game/Interface" "$tf_source/Interface" || exit 91
+)
+
 # Make the staged game use the original installation's Interface folder, so
 # addons installed the normal way (Interface\AddOns next to WowB-ARM64.exe in
 # the GameHub container) are the ones the game loads. Creates the original
