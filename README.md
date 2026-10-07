@@ -8,6 +8,46 @@ pull requests. Test builds from this fork reuse the upstream payload binaries
 unchanged; each published build ships with the upstream source companion and
 the `notices/` folder.
 
+## How to install
+
+You need an AYN Thor, the app **GameHub Lite** (`com.ludashi.aibench`) and
+your own Battle.net account with access to World of Warcraft: Forever (beta).
+No game files are included here: the game comes from Battle.net, as usual.
+
+**Part 1: the game, in GameHub**
+
+1. Install GameHub Lite and open it.
+2. Create a new container (a "PC game") for Battle.net and install
+   **Battle.net** into it with its normal Windows setup program.
+3. Start Battle.net in that container, log in, and install
+   **World of Warcraft: Forever** (the beta). Choose the **ARM64** client
+   if Battle.net asks.
+4. Close the game and Battle.net when the download is done. Keep at least
+   3 GB free on the device.
+
+**Part 2: Thor Forever Reforged**
+
+5. Download **Thor-Forever-Reforged-&lt;version&gt;.zip** from the newest
+   [release](https://github.com/weltenaichaos/thor-forever-reforged/releases).
+   Do not use **Code > Download ZIP**: that is only the source code.
+6. Extract the zip into your **Download** folder, so that you get
+   **Download/Thor-Forever** with `Thor-Forever.exe` directly inside.
+7. In GameHub, open the same container's **Game Settings > General >
+   Startup File Path**, select **Download/Thor-Forever/Thor-Forever.exe**
+   and press **Play**. Write down the old Startup File Path first, so you
+   can switch back.
+8. The start screen says Thor Forever is not installed yet. Press
+   **Install** and leave it open while it shows its steps (a few minutes).
+9. When it says **Installed**, the button changes to **Play**. Press it,
+   log in yourself and play.
+
+From then on, pressing **Play** in GameHub opens this start screen. Game
+updates go through its **Update with Battle.net** button. If something
+breaks, the button offers **Repair**. More details:
+[START-HERE.md](START-HERE.md) and [troubleshooting](docs/TROUBLESHOOTING.md).
+
+---
+
 The original README follows.
 
 ---

@@ -53,7 +53,8 @@ allowed = {
     'tests/test_discovery.py', 'tools/check-publication.py',
     'tuning.conf', 'tests/test_tuning.py',
     '.github/workflows/build-turnip.yml', '.github/workflows/build-dxvk.yml',
-    '.github/workflows/build-wine.yml', 'patches/wine-esync-deferred-close.patch',
+    '.github/workflows/build-wine.yml', '.github/workflows/package-release.yml',
+    'patches/wine-esync-deferred-close.patch',
     'patches/dxvk-2.7-arm64-toolchain.patch',
 }
 problems = []

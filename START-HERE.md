@@ -1,9 +1,12 @@
 # Thor Forever: start here
 
-**Experimental v0.1.0-alpha.1 — tested on one AYN Thor.** Download
-`Thor-Forever-v0.1.0-alpha.1.zip` from the GitHub release, not **Code > Download
-ZIP**. The source companion is a separate developer download, not required for
-playing. The installer ZIP includes `Thor-Forever.exe`, `payload` and notices.
+**Experimental — tested on one AYN Thor.** Download
+`Thor-Forever-Reforged-<version>.zip` from the
+[releases page](https://github.com/weltenaichaos/thor-forever-reforged/releases),
+not **Code > Download ZIP**. The zip contains everything: `Thor-Forever.exe`,
+`installer`, `payload`, the driver, DXVK and Wine files, and notices. The
+[README](README.md) walks through the whole setup, from creating the GameHub
+container to the first game start.
 
 ## Before you start
 
