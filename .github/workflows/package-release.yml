@@ -18,9 +18,14 @@ on:
       tag:
         description: 'Tag for the draft release, e.g. v0.3.0-reforged.1'
         required: true
+      draft_release:
+        description: 'Create the draft release (off = only the zip as a workflow artifact)'
+        type: boolean
+        default: true
       upstream_tag:
-        description: 'Release of AeroNico/thor-forever to take payload/ from (empty = latest)'
-        default: ''
+        # Its releases are pre-releases, which "latest" does not include.
+        description: 'Release of AeroNico/thor-forever to take payload/ from'
+        default: 'v0.1.0-alpha.1'
       turnip_run:
         description: 'Build Turnip run with the driver'
         default: '37196986252'
@@ -55,7 +60,7 @@ jobs:
         env:
           TAG: ${{ inputs.tag }}
         run: |
-          [[ "$TAG" =~ ^v[0-9][0-9A-Za-z.-]*$ ]] || { echo "Unusable tag: $TAG"; exit 1; }
+          [[ "$TAG" =~ ^v[0-9][0-9A-Za-z.-]*$ ]] || { echo "::error::Unusable tag: $TAG"; exit 1; }
           echo "TAG=$TAG" >> "$GITHUB_ENV"
 
       - name: Build the start screen
@@ -72,12 +77,12 @@ jobs:
           UPSTREAM_TAG: ${{ inputs.upstream_tag }}
         run: |
           mkdir upstream
-          gh release download ${UPSTREAM_TAG:+"$UPSTREAM_TAG"} --repo AeroNico/thor-forever \
-            --pattern '*.zip' --dir upstream
-          ls -l upstream
+          gh release download "$UPSTREAM_TAG" --repo AeroNico/thor-forever --pattern '*.zip' --dir upstream ||
+            { echo "::error::Could not download the .zip files of AeroNico/thor-forever release $UPSTREAM_TAG"; exit 1; }
+          echo "::notice::Original kit files: $(ls upstream | tr '\n' ' ')"
           for zip in upstream/*.zip; do unzip -q "$zip" -d upstream/unpacked; done
           payload=$(dirname "$(find upstream/unpacked -name wine-runtime.tar -path '*/payload/*' | head -n 1)")
-          [ -d "$payload" ] || { echo 'No payload/ folder in the original kit'; exit 1; }
+          [ -d "$payload" ] || { echo '::error::No payload/ folder with wine-runtime.tar in the original kit'; exit 1; }
           mkdir -p "$KIT/payload"
           # Only the seven files installer/verify-payload.sh pins, checked below.
           python3 - "$payload" "$KIT/payload" <<'EOF'
@@ -87,9 +92,13 @@ jobs:
           pins = re.findall(r'^([a-f0-9]{64}) ([^\s]+)$', Path('installer/verify-payload.sh').read_text(), re.M)
           assert len(pins) == 7, pins
           for digest, name in pins:
+              if not (source / name).is_file():
+                  print(f'::error::{name} is missing from the original kit')
+                  sys.exit(1)
               actual = hashlib.sha256((source / name).read_bytes()).hexdigest()
               if actual != digest:
-                  sys.exit(f'{name}: sha256 {actual}, expected {digest}')
+                  print(f'::error::{name}: sha256 {actual}, expected {digest}')
+                  sys.exit(1)
               shutil.copy2(source / name, dest / name)
               print('OK', name)
           EOF
@@ -107,11 +116,12 @@ jobs:
             local run=$1 artifact=$2 dest=$3 file found
             shift 3
             rm -rf "comp/$artifact"
-            gh run download "$run" --repo "$GITHUB_REPOSITORY" --name "$artifact" --dir "comp/$artifact"
+            gh run download "$run" --repo "$GITHUB_REPOSITORY" --name "$artifact" --dir "comp/$artifact" ||
+              { echo "::error::Could not download artifact $artifact from run $run"; exit 1; }
             mkdir -p "$KIT/$dest"
             for file in "$@"; do
               found=$(find "comp/$artifact" -name "$file" -type f | head -n 1)
-              [ -n "$found" ] || { echo "$artifact has no $file"; exit 1; }
+              [ -n "$found" ] || { echo "::error::$artifact has no $file"; exit 1; }
               cp "$found" "$KIT/$dest/$file"
             done
           }
@@ -150,6 +160,7 @@ jobs:
           compression-level: 0
 
       - name: Draft pre-release
+        if: inputs.draft_release
         run: |
           cat > notes.md <<EOF
           Complete download: everything needed is in **Thor-Forever-Reforged-$TAG.zip**.
