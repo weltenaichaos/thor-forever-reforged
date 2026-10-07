@@ -136,7 +136,20 @@ static struct setting settings[] = {
 };
 #define SETTING_COUNT (int)(sizeof(settings) / sizeof(*settings))
 static char tuning[65536];
-static HFONT font, big_font;
+static HFONT font, big_font, small_font, title_font;
+static HBRUSH background_brush;
+static int header_height;
+
+/* Colours of the start screen: dark stone and gold, after the game's own
+ * menus (colours only; no game artwork or fonts are used). */
+#define TF_BACKGROUND RGB(18, 14, 10)
+#define TF_HEADER_TOP RGB(52, 34, 18)
+#define TF_GOLD RGB(255, 209, 0)
+#define TF_GOLD_DARK RGB(184, 134, 43)
+#define TF_BRONZE RGB(110, 81, 40)
+#define TF_TEXT RGB(232, 220, 192)
+#define TF_MUTED RGB(168, 149, 112)
+#define TF_WARNING RGB(255, 179, 71)
 static int bnet_started, menu_width, menu_height, notice_height;
 static wchar_t notice_buffer[1024];
 static void refresh_copies(void);
@@ -423,6 +436,146 @@ static void refresh(void)
     if (!refresh_install()) refresh_copies();
 }
 
+/* Vertical gradient, one line at a time (no extra library needed). */
+static void fill_gradient(HDC dc, const RECT *r, COLORREF top, COLORREF bottom)
+{
+    int y, h = r->bottom - r->top;
+    for (y = 0; y < h; ++y) {
+        int f = h > 1 ? y * 256 / (h - 1) : 0;
+        RECT line = { r->left, r->top + y, r->right, r->top + y + 1 };
+        HBRUSH brush = CreateSolidBrush(RGB(
+            (GetRValue(top) * (256 - f) + GetRValue(bottom) * f) / 256,
+            (GetGValue(top) * (256 - f) + GetGValue(bottom) * f) / 256,
+            (GetBValue(top) * (256 - f) + GetBValue(bottom) * f) / 256));
+        FillRect(dc, &line, brush);
+        DeleteObject(brush);
+    }
+}
+
+static void frame(HDC dc, RECT r, COLORREF color)
+{
+    HBRUSH brush = CreateSolidBrush(color);
+    FrameRect(dc, &r, brush);
+    DeleteObject(brush);
+}
+
+/* A small gold diamond, centred on x, y. */
+static void diamond(HDC dc, int x, int y, int size)
+{
+    POINT points[4] = { { x, y - size }, { x + size, y }, { x, y + size }, { x - size, y } };
+    HBRUSH brush = CreateSolidBrush(TF_GOLD_DARK), old_brush = SelectObject(dc, brush);
+    HPEN pen = CreatePen(PS_SOLID, 1, TF_GOLD), old_pen = SelectObject(dc, pen);
+    Polygon(dc, points, 4);
+    SelectObject(dc, old_brush);
+    SelectObject(dc, old_pen);
+    DeleteObject(brush);
+    DeleteObject(pen);
+}
+
+/* Background, gold frame and the title header. */
+static void paint_menu(HWND window)
+{
+    PAINTSTRUCT ps;
+    HDC dc = BeginPaint(window, &ps);
+    RECT client, header, text;
+    int w, gap;
+    GetClientRect(window, &client);
+    w = client.right;
+    gap = header_height / 8;
+    FillRect(dc, &client, background_brush);
+    header = client;
+    header.bottom = header_height;
+    fill_gradient(dc, &header, TF_HEADER_TOP, TF_BACKGROUND);
+    frame(dc, client, TF_GOLD_DARK);
+    InflateRect(&client, -3, -3);
+    frame(dc, client, TF_BRONZE);
+    SetBkMode(dc, TRANSPARENT);
+    SelectObject(dc, title_font);
+    SetTextColor(dc, TF_GOLD);
+    SetTextCharacterExtra(dc, gap / 2);
+    text = header;
+    text.top = gap;
+    text.bottom = header_height * 5 / 8;
+    DrawTextW(dc, L"WORLD OF WARCRAFT", -1, &text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SelectObject(dc, small_font);
+    SetTextColor(dc, TF_MUTED);
+    SetTextCharacterExtra(dc, gap / 4);
+    text.top = text.bottom;
+    text.bottom = header_height - gap;
+    DrawTextW(dc, L"FOREVER  \x00b7  ON THE AYN THOR", -1, &text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    SetTextCharacterExtra(dc, 0);
+    /* Divider: gold line with a diamond in the middle. */
+    {
+        RECT line = { w / 6, header_height, w * 5 / 6, header_height + 1 };
+        HBRUSH brush = CreateSolidBrush(TF_GOLD_DARK);
+        FillRect(dc, &line, brush);
+        DeleteObject(brush);
+        diamond(dc, w / 2, header_height, gap);
+        diamond(dc, w / 6, header_height, gap / 2);
+        diamond(dc, w * 5 / 6, header_height, gap / 2);
+    }
+    EndPaint(window, &ps);
+}
+
+/* Buttons: Play in the game's red with a gold edge, the others in dark
+ * bronze. The three setting buttons show their name small and the value
+ * in gold. */
+static void draw_button(const DRAWITEMSTRUCT *d)
+{
+    HDC dc = d->hDC;
+    RECT r = d->rcItem, inner;
+    wchar_t text[160], *colon;
+    int play = d->hwndItem == play_button, i, setting = 0;
+    int pressed = d->itemState & ODS_SELECTED, disabled = d->itemState & ODS_DISABLED;
+    int focus = d->itemState & ODS_FOCUS;
+    COLORREF top, bottom, edge, ink;
+    for (i = 0; i < SETTING_COUNT; ++i) if (d->hwndItem == settings[i].button) setting = 1;
+    if (disabled) {
+        top = RGB(46, 40, 34); bottom = RGB(34, 29, 24); edge = RGB(80, 70, 58); ink = RGB(130, 120, 104);
+    } else if (play) {
+        top = RGB(170, 40, 26); bottom = RGB(96, 16, 9); edge = TF_GOLD_DARK; ink = RGB(255, 226, 140);
+    } else {
+        top = RGB(58, 43, 29); bottom = RGB(30, 22, 15); edge = TF_BRONZE; ink = TF_TEXT;
+    }
+    if (pressed) { COLORREF swap = top; top = bottom; bottom = swap; }
+    if (focus && !disabled) edge = TF_GOLD;
+    fill_gradient(dc, &r, top, bottom);
+    frame(dc, r, edge);
+    inner = r;
+    InflateRect(&inner, -1, -1);
+    frame(dc, inner, RGB(12, 9, 6));
+    if (pressed) OffsetRect(&r, 1, 1);
+    GetWindowTextW(d->hwndItem, text, 160);
+    SetBkMode(dc, TRANSPARENT);
+    colon = setting ? wcschr(text, L':') : NULL;
+    if (colon) {
+        RECT label = r, value = r;
+        *colon = 0;
+        label.bottom = r.top + (r.bottom - r.top) * 9 / 20;
+        value.top = label.bottom;
+        value.bottom = r.bottom - (r.bottom - r.top) / 10;
+        SelectObject(dc, small_font);
+        SetTextColor(dc, disabled ? ink : TF_MUTED);
+        DrawTextW(dc, text, -1, &label, DT_CENTER | DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX);
+        SelectObject(dc, font);
+        SetTextColor(dc, disabled ? ink : TF_GOLD);
+        DrawTextW(dc, colon[1] == L' ' ? colon + 2 : colon + 1, -1, &value,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    } else {
+        RECT measure = r;
+        int height;
+        SelectObject(dc, play ? big_font : font);
+        SetTextColor(dc, ink);
+        InflateRect(&measure, -4, 0);
+        height = DrawTextW(dc, text, -1, &measure, DT_CENTER | DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX);
+        measure.left = r.left + 4;
+        measure.right = r.right - 4;
+        measure.top = r.top + (r.bottom - r.top - height) / 2;
+        measure.bottom = measure.top + height;
+        DrawTextW(dc, text, -1, &measure, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+    }
+}
+
 static HWND add_control(HWND parent, const wchar_t *cls, const wchar_t *text, DWORD style,
                         int x, int y, int w, int h, int id, HFONT f)
 {
@@ -477,6 +630,21 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_TIMER:
         refresh();
         return 0;
+    case WM_PAINT:
+        paint_menu(window);
+        return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_DRAWITEM:
+        draw_button((const DRAWITEMSTRUCT *)lparam);
+        return TRUE;
+    case WM_CTLCOLORSTATIC: {
+        HDC dc = (HDC)wparam;
+        HWND control = (HWND)lparam;
+        SetTextColor(dc, control == notice_text ? TF_WARNING : control == version_text ? TF_GOLD : TF_TEXT);
+        SetBkColor(dc, TF_BACKGROUND);
+        return (LRESULT)background_brush;
+    }
     case WM_CLOSE:
         if (!quit_while_installing(window)) return 0;
         DestroyWindow(window);
@@ -496,7 +664,13 @@ static int show_menu(HINSTANCE instance)
     int u = sh / 24, w = sw * 3 / 5, h, x = u, y = u, bw, i;
     if (u < 16) u = 16;
     if (w < 24 * u) w = 24 * u < sw ? 24 * u : sw;
-    h = 15 * u;
+    header_height = u * 3;
+    h = header_height + u * 23 / 2;
+    title_font = CreateFontW(-u * 5 / 4, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                             CLEARTYPE_QUALITY, 0, L"Tahoma");
+    small_font = CreateFontW(-u / 2, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                             CLEARTYPE_QUALITY, 0, L"Tahoma");
+    background_brush = CreateSolidBrush(TF_BACKGROUND);
     font = CreateFontW(-u * 2 / 3, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                        CLEARTYPE_QUALITY, 0, L"Tahoma");
     big_font = CreateFontW(-u, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
@@ -504,11 +678,13 @@ static int show_menu(HINSTANCE instance)
     wc.lpfnWndProc = window_proc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hbrBackground = background_brush;
+    /* Repaint everything when the window grows for the note. */
+    wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpszClassName = L"ThorForeverMenu";
     RegisterClassW(&wc);
     window = CreateWindowExW(WS_EX_APPWINDOW, wc.lpszClassName, L"Thor Forever",
-                             WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                             WS_POPUP | WS_SYSMENU,
                              (sw - w) / 2, (sh - h) / 2, w, h, NULL, NULL, instance, NULL);
     menu_window = window;
     menu_width = w;
@@ -519,9 +695,7 @@ static int show_menu(HINSTANCE instance)
         GetClientRect(window, &client);
         w = client.right;
     }
-    add_control(window, L"STATIC", L"World of Warcraft on the AYN Thor", SS_LEFT,
-                x, y, w - 2 * u, u * 3 / 2, 0, big_font);
-    y += u * 2;
+    y = header_height + u / 2;
     version_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u, 0, font);
     y += u;
     status_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u * 2, 0, font);
@@ -529,16 +703,16 @@ static int show_menu(HINSTANCE instance)
     bw = (w - 4 * u) / 3;
     if (!read_text(in_kit(L"\\tuning.conf"), tuning, sizeof(tuning))) tuning[0] = 0;
     for (i = 0; i < SETTING_COUNT; ++i) {
-        settings[i].button = add_control(window, L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP,
+        settings[i].button = add_control(window, L"BUTTON", L"", BS_OWNERDRAW | WS_TABSTOP,
                                          x + i * (bw + u), y, bw, u * 2, ID_SETTING + i, font);
         show_setting(&settings[i]);
     }
     y += u * 3;
-    play_button = add_control(window, L"BUTTON", L"Play", BS_DEFPUSHBUTTON | WS_TABSTOP,
+    play_button = add_control(window, L"BUTTON", L"Play", BS_OWNERDRAW | WS_TABSTOP,
                               x, y, bw, u * 3, ID_PLAY, big_font);
-    add_control(window, L"BUTTON", L"Update with\nBattle.net", BS_PUSHBUTTON | BS_MULTILINE | WS_TABSTOP,
+    add_control(window, L"BUTTON", L"Update with Battle.net", BS_OWNERDRAW | WS_TABSTOP,
                 x + bw + u, y, bw, u * 3, ID_UPDATE, font);
-    add_control(window, L"BUTTON", L"Quit", BS_PUSHBUTTON | WS_TABSTOP,
+    add_control(window, L"BUTTON", L"Quit", BS_OWNERDRAW | WS_TABSTOP,
                 x + 2 * (bw + u), y, bw, u * 3, ID_QUIT, font);
     /* Shown only when the game is installed in more than one container. */
     y += u * 4;
@@ -556,6 +730,9 @@ static int show_menu(HINSTANCE instance)
     }
     DeleteObject(font);
     DeleteObject(big_font);
+    DeleteObject(small_font);
+    DeleteObject(title_font);
+    DeleteObject(background_brush);
     return (int)msg.wParam;
 }
 
