@@ -38,16 +38,23 @@ tf_stage=preflight
 trap 'tf_status=$?; print -r -- "SCRIPT_EXIT=$tf_status STAGE=$tf_stage"' EXIT
 [ -f "$KIT/installer/discover-game.sh" ] || exit 3
 . "$KIT/installer/discover-game.sh"
-if ! tf_discover_game "$USR"; then
+# GameHub runs this launch inside one container; its WINEPREFIX is that
+# container's folder. With the game in several containers, that one is used.
+tf_container=
+case "${WINEPREFIX-}" in "$USR/home/virtual_containers/"*) tf_container=${WINEPREFIX%/} ;; esac
+if ! tf_discover_game "$USR" "$tf_container"; then
     if [ "$TF_DISCOVERY_STATUS" = multiple ]; then
-        print -r -- 'STOP: the game is installed in more than one GameHub container. Keep one and delete the other (or its World of Warcraft folder):'
+        print -r -- 'STOP: the game is installed in more than one GameHub container, and none is the one Thor Forever was started from. Keep one and delete the other (or its World of Warcraft folder):'
         print -rn -- "$TF_GAME_LIST"
+        print -r -- "Started from: ${WINEPREFIX-unknown}"
     else
         print -r -- 'STOP: the game was not found. Looked for World of Warcraft\_classic_beta_\WowB-ARM64.exe under C:\Program Files (x86) and C:\Program Files in every GameHub container. Install it there through Battle.net.'
     fi
     exit 4
 fi
 SOURCE=$TF_GAME_DIR
+[ "$TF_DISCOVERY_STATUS" = preferred ] &&
+    print -r -- "GAME: installed in $TF_GAME_COUNT containers; using the one Thor Forever was started from: $SOURCE"
 [ -s "$ROOT/components-ready" ] && [ -s "$ROOT/game-ready" ] || exit 5
 [ -s "$PREFIX/system.reg" ] && [ ! -L "$ROOT" ] && [ ! -L "$PREFIX" ] || exit 6
 # After the game was reinstalled into another container, point the staged
