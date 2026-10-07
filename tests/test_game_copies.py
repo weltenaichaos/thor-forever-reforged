@@ -127,12 +127,30 @@ class GameCopiesTests(unittest.TestCase):
             self.assertEqual(self.remove('a', name), 2, name)
         self.assertTrue(other.exists())
 
-    def test_refuses_container_without_game(self):
+    def test_refuses_container_without_game_folder(self):
         self.add_game('a')
-        self.add_game('b')
-        (self.boxes / 'c/drive_c' / PROGRAMS / 'World of Warcraft').mkdir(parents=True)
+        (self.boxes / 'c/drive_c' / PROGRAMS).mkdir(parents=True)
         self.assertEqual(self.remove('a', 'c'), 9)
-        self.assertTrue((self.boxes / 'c/drive_c' / PROGRAMS / 'World of Warcraft').exists())
+        self.assertTrue((self.boxes / 'c/drive_c' / PROGRAMS).exists())
+
+    def test_lists_and_removes_leftovers(self):
+        # A copy whose removal stopped halfway: no WowB-ARM64.exe any more.
+        self.add_game('a')
+        other = self.add_game('b')
+        (other / '_classic_beta_/WowB-ARM64.exe').unlink()
+        self.assertEqual(self.scan('a'), ['LEFTOVER b'])
+        self.assertEqual(self.remove('a', 'b'), 0)
+        self.assertFalse(other.exists())
+        self.assertIsNone(self.scan('a'))
+
+    def test_leftovers_only_listed_with_a_copy_here(self):
+        other = self.add_game('b')
+        (other / '_classic_beta_/WowB-ARM64.exe').unlink()
+        self.add_game('a')
+        (self.boxes / 'c').mkdir()
+        self.assertIsNone(self.scan('c'))
+        self.assertEqual(self.remove('c', 'b'), 3)
+        self.assertTrue(other.exists())
 
     def test_refuses_linked_container(self):
         self.add_game('a')

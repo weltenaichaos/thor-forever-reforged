@@ -622,7 +622,7 @@ static void refresh_copies(void)
     static char copies[4096], sizes[4096];
     wchar_t path[512], text[1024], size_text[64] = L"size not measured yet";
     char *line, *kind, *rest, first_other[128] = "";
-    int others = 0, elsewhere = 0, i;
+    int others = 0, elsewhere = 0, leftover = 0, i;
     if (!bridge_waiting) return;
     if (removing) {
         entry_path(path, bridge_token, L"removed");
@@ -641,8 +641,12 @@ static void refresh_copies(void)
     if (!read_text(path, copies, sizeof(copies))) copies[0] = 0;
     for (line = copies; *line;) {
         line = split_line(line, &kind, &rest);
-        if (!strcmp(kind, "OTHER")) {
-            if (!others++ && container_name_ok(rest)) strcpy(first_other, rest);
+        if (!strcmp(kind, "OTHER") || !strcmp(kind, "LEFTOVER")) {
+            /* A half-removed copy: its World of Warcraft folder is still there. */
+            if (!others++ && container_name_ok(rest)) {
+                strcpy(first_other, rest);
+                leftover = !strcmp(kind, "LEFTOVER");
+            }
         } else if (!strcmp(kind, "ELSEWHERE")) {
             ++elsewhere;
         }
@@ -662,8 +666,12 @@ static void refresh_copies(void)
         }
         for (i = 0; other_name[i] && i < 14; ++i) path[i] = (unsigned char)other_name[i];
         wcscpy(path + i, other_name[i] ? L"..." : L"");
-        swprintf(text, 1024, L"The game is also installed in another GameHub container (%ls, %ls). "
-                 L"You play from the copy in this container.", path, size_text);
+        swprintf(text, 1024, leftover
+                 ? L"Leftovers of a game copy are still in another GameHub container (%ls, %ls). "
+                   L"You play from the copy in this container."
+                 : L"The game is also installed in another GameHub container (%ls, %ls). "
+                   L"You play from the copy in this container.", path, size_text);
+        SetWindowTextW(remove_button, leftover ? L"Remove leftovers" : L"Remove other copy");
         if (notice_message[0]) {
             wcscat(text, L" ");
             wcsncat(text, notice_message, 1023 - wcslen(text));
