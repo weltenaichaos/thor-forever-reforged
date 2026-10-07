@@ -30,14 +30,16 @@ No game files are included here: the game comes from Battle.net, as usual.
 5. Download **Thor-Forever-Reforged-&lt;version&gt;.zip** from the newest
    [release](https://github.com/weltenaichaos/thor-forever-reforged/releases).
    Do not use **Code > Download ZIP**: that is only the source code.
-6. Extract the zip into your **Download** folder, so that you get
-   **Download/Thor-Forever** with `Thor-Forever.exe` directly inside.
-   Another folder in your internal storage works too (no spaces in its
-   path); then use that folder in the next step.
+6. Extract the zip into a folder in the device's internal storage, so that
+   you get a **Thor-Forever** folder with `Thor-Forever.exe` directly inside.
+   **Download/Thor-Forever** is the suggested place, but it can be anywhere
+   that meets the conditions under "Where the Thor-Forever folder can be"
+   below.
 7. In GameHub, open the same container's **Game Settings > General >
-   Startup File Path**, select **Download/Thor-Forever/Thor-Forever.exe**
-   and press **Play**. Write down the old Startup File Path first, so you
-   can switch back.
+   Startup File Path**, select **Thor-Forever.exe** inside your Thor-Forever
+   folder (for example **Download/Thor-Forever/Thor-Forever.exe**) and press
+   **Play**. Write down the old Startup File Path first, so you can switch
+   back.
 8. The start screen says Thor Forever is not installed yet. Press
    **Install** and leave it open while it shows its steps (a few minutes).
 9. When it says **Installed**, the button changes to **Play**. Press it,
@@ -47,6 +49,21 @@ From then on, pressing **Play** in GameHub opens this start screen. Game
 updates go through its **Update with Battle.net** button. If something
 breaks, the button offers **Repair**. More details:
 [START-HERE.md](START-HERE.md) and [troubleshooting](docs/TROUBLESHOOTING.md).
+
+**Where the Thor-Forever folder can be:** anywhere, as long as
+
+- it is in the device's internal shared storage, for example
+  `Download/Thor-Forever`, `Games/Thor-Forever` or directly at the top of the
+  internal storage (`Thor-Forever`). Not inside `Android/data` or
+  `Android/obb`: GameHub cannot see those folders. A memory card is untested.
+- its whole path uses only letters, digits, `-`, `_` and `.`: no spaces or
+  other special characters. The start screen says so if the path is not
+  allowed.
+- the folder stays complete: `Thor-Forever.exe` sits directly next to
+  `installer`, `payload` and the other folders from the zip, not in a second
+  nested folder.
+
+The start screen always works with the folder it was started from.
 
 **Moving the Thor-Forever folder later:** **copy** it, never cut or move
 it. GameHub Lite hides the game's settings as soon as its Startup File Path

@@ -15,7 +15,7 @@ tf_install_state()
     elif [ ! -L "$tf_state_root" ] && [ -s "$tf_state_root/components-ready" ] && [ -s "$tf_state_root/game-ready" ] &&
         [ -s "$tf_state_root/prefix/system.reg" ] && [ -s "$tf_state_root/game/_classic_beta_/WowB-ARM64.exe" ] &&
         [ ! -e "$3/repair" ] && [ ! -e "$3/repair.txt" ]; then
-        # A file named "repair" (or repair.txt) in Download/Thor-Forever
+        # A file named "repair" (or repair.txt) in the Thor-Forever folder
         # offers Repair even for a working installation (to redo it, or to
         # test it).
         print -r -- 'STATE installed'
