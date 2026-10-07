@@ -6,7 +6,10 @@
 # Repair never deletes anything: the damaged installation is renamed to
 # release-v1.old-<n> (it can be deleted by hand later), a fresh one is made,
 # and the game settings (WTF) are copied over from the old one.
-KIT=/sdcard/Download/Thor-Forever
+# KIT is the Thor-Forever folder this script was started from (any folder in
+# shared storage, Download/Thor-Forever by default).
+case "$0" in /*/installer/*.sh) KIT=${0%/installer/*} ;; *) exit 2 ;; esac
+case "$KIT" in *[!A-Za-z0-9/._-]*|*/../*|*/./*|*/..|*/.) exit 2 ;; esac
 mode=$1
 out=$2
 case "$mode" in install|repair) ;; *) exit 2 ;; esac

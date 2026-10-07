@@ -18,12 +18,58 @@
  * itself; this program never touches the game's files or memory. Playing
  * keeps GameHub's tracked process alive until the game bridge finishes. */
 
-#define KIT L"Z:\\sdcard\\Download\\Thor-Forever"
 #define ID_PLAY 101
 #define ID_UPDATE 102
 #define ID_QUIT 103
 #define ID_SETTING 110
 #define ID_REFRESH 1
+
+/* The Thor-Forever folder is the folder this program is in (Download/
+ * Thor-Forever by default, but any folder in shared storage works). KIT is
+ * its Windows path, kit_unix the same folder for the Android shell. */
+static wchar_t KIT[MAX_PATH], kit_unix[MAX_PATH];
+
+typedef char *(CDECL *unix_name_function)(const WCHAR *);
+
+static int find_kit(void)
+{
+    wchar_t *slash, *c;
+    unix_name_function unix_name;
+    DWORD length = GetModuleFileNameW(NULL, KIT, MAX_PATH);
+    if (!length || length >= MAX_PATH - 40) return 0;
+    slash = wcsrchr(KIT, L'\\');
+    if (!slash) return 0;
+    *slash = 0;
+    /* Wine knows which Unix folder each drive letter stands for. */
+    unix_name = (unix_name_function)(void (*)(void))GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "wine_get_unix_file_name");
+    if (unix_name) {
+        char *name = unix_name(KIT);
+        if (name) {
+            if (!MultiByteToWideChar(CP_UTF8, 0, name, -1, kit_unix, MAX_PATH)) kit_unix[0] = 0;
+            HeapFree(GetProcessHeap(), 0, name);
+        }
+    }
+    /* Without it, Z: is the Unix root, as in every Wine prefix. */
+    if (!kit_unix[0] && (KIT[0] == L'Z' || KIT[0] == L'z') && KIT[1] == L':' && KIT[2] == L'\\') {
+        wcscpy(kit_unix, KIT + 2);
+        for (c = kit_unix; *c; ++c) if (*c == L'\\') *c = L'/';
+    }
+    /* The installer scripts accept the same characters. */
+    if (kit_unix[0] != L'/') return 0;
+    for (c = kit_unix; *c; ++c)
+        if (!wcschr(L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-", *c)) return 0;
+    return !wcsstr(kit_unix, L"/../") && !wcsstr(kit_unix, L"/./");
+}
+
+/* KIT + rel, in one of four rotating buffers. */
+static const wchar_t *in_kit(const wchar_t *rel)
+{
+    static wchar_t buffers[4][MAX_PATH + 64];
+    static int next;
+    wchar_t *out = buffers[next++ & 3];
+    swprintf(out, MAX_PATH + 64, L"%ls%ls", KIT, rel);
+    return out;
+}
 
 static const wchar_t *const program_dirs[] = {
     L"C:\\Program Files (x86)", L"C:\\Program Files"
@@ -258,15 +304,15 @@ static int save_setting(const struct setting *s, const char *value)
     if (!line) out[head++] = '\n';
     memcpy(out + head, rest, tail);
     head += tail;
-    file = CreateFileW(KIT L"\\tuning.conf.tmp", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    file = CreateFileW(in_kit(L"\\tuning.conf.tmp"), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) return 0;
     if (!WriteFile(file, out, (DWORD)head, &written, NULL) || written != head) {
         CloseHandle(file);
-        DeleteFileW(KIT L"\\tuning.conf.tmp");
+        DeleteFileW(in_kit(L"\\tuning.conf.tmp"));
         return 0;
     }
     CloseHandle(file);
-    if (!MoveFileExW(KIT L"\\tuning.conf.tmp", KIT L"\\tuning.conf", MOVEFILE_REPLACE_EXISTING)) return 0;
+    if (!MoveFileExW(in_kit(L"\\tuning.conf.tmp"), in_kit(L"\\tuning.conf"), MOVEFILE_REPLACE_EXISTING)) return 0;
     memcpy(tuning, out, head);
     tuning[head] = 0;
     return 1;
@@ -437,7 +483,7 @@ static int show_menu(HINSTANCE instance)
     status_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u * 2, 0, font);
     y += u * 3;
     bw = (w - 4 * u) / 3;
-    if (!read_text(KIT L"\\tuning.conf", tuning, sizeof(tuning))) tuning[0] = 0;
+    if (!read_text(in_kit(L"\\tuning.conf"), tuning, sizeof(tuning))) tuning[0] = 0;
     for (i = 0; i < SETTING_COUNT; ++i) {
         settings[i].button = add_control(window, L"BUTTON", L"", BS_PUSHBUTTON | WS_TABSTOP,
                                          x + i * (bw + u), y, bw, u * 2, ID_SETTING + i, font);
@@ -478,7 +524,7 @@ static void write_diag(HANDLE starter, const wchar_t *command)
     DWORD code = 0, written;
     char line[600];
     int n;
-    file = CreateFileW(KIT L"\\logs\\launch-diag.txt", GENERIC_WRITE, FILE_SHARE_READ, NULL,
+    file = CreateFileW(in_kit(L"\\logs\\launch-diag.txt"), GENERIC_WRITE, FILE_SHARE_READ, NULL,
                        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE) return;
     if (!GetExitCodeProcess(starter, &code)) code = 0xffffffff;
@@ -531,10 +577,10 @@ static int start_bridge(int wait)
     si.cb = sizeof(si);
     if (!length || length + 11 >= MAX_PATH) return 0;
     wcscat(start, L"\\start.exe");
-    CreateDirectoryW(KIT L"\\logs", NULL);
+    CreateDirectoryW(in_kit(L"\\logs"), NULL);
     swprintf(bridge_token, 80, L"%lu-%llu", GetCurrentProcessId(), GetTickCount64());
-    swprintf(bridge_command, 1024, L"\"%ls\" /unix /system/bin/sh /sdcard/Download/Thor-Forever/installer/entry.sh %ls%ls",
-             start, bridge_token, wait ? L" wait" : L"");
+    swprintf(bridge_command, 1024, L"\"%ls\" /unix /system/bin/sh %ls/installer/entry.sh %ls%ls",
+             start, kit_unix, bridge_token, wait ? L" wait" : L"");
     if (!CreateProcessW(start, bridge_command, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) return 0;
     CloseHandle(pi.hThread);
     if (bridge_starter) CloseHandle(bridge_starter);
@@ -546,7 +592,7 @@ static int start_bridge(int wait)
 static void prepare_bridge(void)
 {
     static char script[8192];
-    if (!read_text(KIT L"\\installer\\entry.sh", script, sizeof(script))) return;
+    if (!read_text(in_kit(L"\\installer\\entry.sh"), script, sizeof(script))) return;
     if (!strstr(script, "TF_WAIT_FOR_PLAY")) return;
     bridge_waiting = start_bridge(1);
 }
@@ -695,8 +741,8 @@ static int install_blocker(wchar_t *text, size_t size)
     if (!payload_ok) {
         for (i = 0; payload_missing[i] && i < 255; ++i) files[i] = (unsigned char)payload_missing[i];
         files[i] = 0;
-        swprintf(text, size, L"These install files are missing in Download/Thor-Forever/payload:%ls. "
-                 L"Copy the complete Thor Forever package there.", files);
+        swprintf(text, size, L"These install files are missing in the Thor-Forever folder's payload folder:%ls. "
+                 L"Extract the complete Thor Forever package again.", files);
         return 1;
     }
     return 0;
@@ -886,8 +932,15 @@ static int run_game(void)
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR args, int show)
 {
     (void)previous; (void)args; (void)show;
-    if (GetFileAttributesW(KIT L"\\installer\\entry.sh") == INVALID_FILE_ATTRIBUTES) {
-        MessageBoxW(NULL, L"Required files are missing. Extract the complete package into Download/Thor-Forever.", L"Thor Forever", MB_OK | MB_ICONERROR);
+    if (!find_kit()) {
+        MessageBoxW(NULL, L"Thor Forever cannot use the folder it is in. Use a folder in your device's storage "
+                    L"(for example Download/Thor-Forever) whose path has only letters, digits, - _ and . (no spaces).",
+                    L"Thor Forever", MB_OK | MB_ICONERROR);
+        return 2;
+    }
+    if (GetFileAttributesW(in_kit(L"\\installer\\entry.sh")) == INVALID_FILE_ATTRIBUTES) {
+        MessageBoxW(NULL, L"Required files are missing. Extract the complete package again, so that the installer "
+                    L"and payload folders are next to Thor-Forever.exe.", L"Thor Forever", MB_OK | MB_ICONERROR);
         return 2;
     }
     prepare_bridge();

@@ -1,6 +1,9 @@
 #!/system/bin/sh
 # Thor Forever launcher. No Battle.net/update invocation.
-KIT=/sdcard/Download/Thor-Forever
+# KIT is the Thor-Forever folder this script was started from (any folder in
+# shared storage, Download/Thor-Forever by default).
+case "$0" in /*/installer/*.sh) KIT=${0%/installer/*} ;; *) exit 2 ;; esac
+case "$KIT" in *[!A-Za-z0-9/._-]*|*/../*|*/./*|*/..|*/.) exit 2 ;; esac
 USR=/data/user/0/com.ludashi.aibench/files/usr
 case "${WINEPREFIX-}" in
     /data/user/*/com.ludashi.aibench/files/usr/*) USR=${WINEPREFIX%%/files/usr/*}/files/usr ;;
@@ -395,7 +398,7 @@ if [ "$tf_esync" = on ]; then
     # Esync needs one file descriptor per Windows sync object.
     print -r -- "FD_LIMIT soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
 fi
-export DXVK_LOG_PATH="Z:\\sdcard\\Download\\Thor-Forever\\logs\\run-$n"
+export DXVK_LOG_PATH="Z:${KIT//\//\\}\\logs\\run-$n"
 # With PROFILE=on, the Thor-tuned DXVK also writes frames.csv: one line per
 # frame with its duration and what DXVK did in it, to find stutters. Other
 # DXVK builds ignore the variable. Our test Wine (WINE=test) also writes,

@@ -21,6 +21,12 @@ playing. The installer ZIP includes `Thor-Forever.exe`, `payload` and notices.
 1. Extract the complete package so that `Thor-Forever.exe` and the `payload`
    and `installer` folders are directly inside **Download/Thor-Forever**. Do
    not leave them inside a second nested folder.
+   Download/Thor-Forever is only the suggested place: any folder in the
+   device's shared storage works (for example **Games/Thor-Forever**), as long
+   as its path has no spaces and only letters, digits, `-`, `_` and `.`. The
+   start screen uses the folder it is in. To move it later, close Thor
+   Forever, move the whole folder, and select the moved Thor-Forever.exe as
+   the Startup File Path. Nothing needs to be installed again.
 2. In GameHub, open the container where you installed the game: **Game
    Settings > General > Startup File Path**, select
    **Download/Thor-Forever/Thor-Forever.exe**, and press **Play**.

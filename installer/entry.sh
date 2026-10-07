@@ -1,5 +1,8 @@
 #!/system/bin/sh
-KIT=/sdcard/Download/Thor-Forever
+# KIT is the Thor-Forever folder this script was started from (any folder in
+# shared storage, Download/Thor-Forever by default).
+case "$0" in /*/installer/*.sh) KIT=${0%/installer/*} ;; *) exit 2 ;; esac
+case "$KIT" in *[!A-Za-z0-9/._-]*|*/../*|*/./*|*/..|*/.) exit 2 ;; esac
 case "${1-}" in ''|*[!0-9-]*) exit 2 ;; esac
 token=$1
 [ "${#token}" -le 80 ] || exit 2

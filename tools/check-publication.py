@@ -50,7 +50,7 @@ allowed = {
     'installer/Config-Thor-Forever.wtf', 'docs/DEPENDENCIES.md',
     'installer/verify-payload.sh', 'installer/install-components.sh',
     'tools/audit-runtime-archive.py', 'tests/test_archive_audit.py',
-    'tests/test_discovery.py', 'tools/check-publication.py',
+    'tests/test_discovery.py', 'tests/test_kit_location.py', 'tools/check-publication.py',
     'tuning.conf', 'tests/test_tuning.py',
     '.github/workflows/build-turnip.yml', '.github/workflows/build-dxvk.yml',
     '.github/workflows/build-wine.yml', 'patches/wine-esync-deferred-close.patch',
