@@ -479,38 +479,45 @@ static const wchar_t *heading_face = L"Tahoma";
 /* A word in the style of the game's logo, centred on cx, cy: a metal
  * gradient (top, middle, bottom colours) with a dark bronze outline and a
  * soft shadow. */
+/* Fills region grown by radius (copies shifted around circles), shifted
+ * down by drop: an outline that only follows the letters' outer edges. */
+static void grown_region(HDC dc, HRGN region, int radius, int drop, COLORREF color)
+{
+    HBRUSH brush = CreateSolidBrush(color);
+    HRGN copy = CreateRectRgn(0, 0, 0, 0);
+    int ring, step;
+    for (ring = 1; ring <= 3; ++ring)
+        for (step = 0; step < 24; ++step) {
+            double angle = 6.283185307 * step / 24;
+            int dx = (int)(radius * ring / 3.0 * cos(angle)), dy = (int)(radius * ring / 3.0 * sin(angle));
+            CombineRgn(copy, region, NULL, RGN_COPY);
+            OffsetRgn(copy, dx, dy + drop);
+            FillRgn(dc, copy, brush);
+        }
+    DeleteObject(copy);
+    DeleteObject(brush);
+}
+
 static void logo_word(HDC dc, const wchar_t *word, int cx, int cy, const COLORREF metal[3])
 {
-    static const struct { int width; COLORREF color; } strokes[] = {
-        { 6, RGB(10, 22, 34) }, { 5, RGB(138, 102, 52) }, { 3, RGB(42, 26, 12) }
-    };
-    int length = (int)wcslen(word), x, y, i;
+    int length = (int)wcslen(word), x, y;
     SIZE size;
     HRGN region;
     RECT fill;
-    LOGBRUSH ink = { BS_SOLID, 0, 0 };
     GetTextExtentPoint32W(dc, word, length, &size);
     x = cx - size.cx / 2;
     y = cy - size.cy / 2;
-    for (i = 0; i < 3; ++i) {
-        HPEN pen, old;
-        int shift = i == 0 ? 2 * SCALE : 0;
-        ink.lbColor = strokes[i].color;
-        pen = ExtCreatePen(PS_GEOMETRIC | PS_SOLID | PS_JOIN_ROUND | PS_ENDCAP_ROUND,
-                           strokes[i].width * SCALE, &ink, 0, NULL);
-        old = SelectObject(dc, pen);
-        BeginPath(dc);
-        TextOutW(dc, x, y + shift, word, length);
-        EndPath(dc);
-        StrokePath(dc);
-        SelectObject(dc, old);
-        DeleteObject(pen);
-    }
+    /* WINDING: overlapping parts of a letter stay filled instead of
+     * cancelling out into holes. */
+    SetPolyFillMode(dc, WINDING);
     BeginPath(dc);
     TextOutW(dc, x, y, word, length);
     EndPath(dc);
     region = PathToRegion(dc);
     if (!region) return;
+    grown_region(dc, region, 3 * SCALE, 2 * SCALE, RGB(10, 22, 34));
+    grown_region(dc, region, 5 * SCALE / 2, 0, RGB(138, 102, 52));
+    grown_region(dc, region, 3 * SCALE / 2, 0, RGB(42, 26, 12));
     SelectClipRgn(dc, region);
     fill.left = x;
     fill.right = x + size.cx;
@@ -530,13 +537,13 @@ static void dot(HDC dc, double x, double y, double r)
     Ellipse(dc, (int)(x - r), (int)(y - r), (int)(x + r + 1), (int)(y + r + 1));
 }
 
-/* The infinity swash under FOREVER: a calligraphic infinity sign (thin
- * where the strokes cross, full on the loops) with tapering lines to both
- * sides, in the same silvery white as FOREVER, with a dark edge. */
+/* The infinity sign under FOREVER: calligraphic (thin where the strokes
+ * cross, full on the loops), in the same silvery white as FOREVER, with a
+ * dark edge. The lines to its sides are added by swash_tails. */
 static void swash(HDC dc, int cx, int cy, int half_width, int thickness)
 {
     static const COLORREF colors[3] = { RGB(8, 22, 34), RGB(214, 210, 200), RGB(255, 255, 255) };
-    int pass, i, steps = 1600, tail = half_width * 2;
+    int pass, i, steps = 1600;
     HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
     for (pass = 0; pass < 3; ++pass) {
         HBRUSH brush = CreateSolidBrush(colors[pass]);
@@ -548,17 +555,51 @@ static void swash(HDC dc, int cx, int cy, int half_width, int thickness)
             double r = thickness * (0.3 + 0.7 * fabs(c));
             dot(dc, x, y - r * lift, r * shrink + grow);
         }
-        /* Tails, thinning out away from the sign. */
-        for (i = 0; i < tail; i += SCALE / 2 + 1) {
-            double f = 1.0 - (double)i / tail, r = thickness * 0.55 * f + SCALE * 0.4;
-            double off = half_width + thickness * 2 + i;
-            dot(dc, cx - off, cy - r * lift, r * shrink + grow);
-            dot(dc, cx + off, cy - r * lift, r * shrink + grow);
-        }
         SelectObject(dc, old_brush);
         DeleteObject(brush);
     }
     SelectObject(dc, old_pen);
+}
+
+/* Share of the pixel row [y, y + 1] covered by [top, bottom]. */
+static double cover(int y, double top, double bottom)
+{
+    double a = top > y ? top : y, b = bottom < y + 1 ? bottom : y + 1;
+    return b > a ? b - a : 0;
+}
+
+static void blend(unsigned char *p, COLORREF color, double amount)
+{
+    if (amount <= 0) return;
+    if (amount > 1) amount = 1;
+    p[0] = (unsigned char)(p[0] + (GetBValue(color) - p[0]) * amount);
+    p[1] = (unsigned char)(p[1] + (GetGValue(color) - p[1]) * amount);
+    p[2] = (unsigned char)(p[2] + (GetRValue(color) - p[2]) * amount);
+}
+
+/* The lines left and right of the infinity sign, drawn straight into the
+ * finished w-pixel-wide header with exact coverage per pixel, so they
+ * taper smoothly to a sharp point: from start pixels off the centre cx,
+ * length pixels long, half as thick as r0 at the start, around row cy. */
+static void swash_tails(unsigned char *bits, int w, int h, double cx, double cy, double start,
+                        double length, double r0)
+{
+    int side, x, y;
+    for (side = -1; side <= 1; side += 2)
+        for (x = 0; x < w; ++x) {
+            double off = side * (x + 0.5 - cx) - start, f, r, edge;
+            if (off < 0 || off > length) continue;
+            f = off / length;
+            r = r0 * pow(1 - f, 1.4);
+            edge = 0.7 * (1 - f);
+            for (y = (int)(cy - r - 2); y <= (int)(cy + r + 2); ++y) {
+                unsigned char *p;
+                if (y < 0 || y >= h) continue;
+                p = bits + 4 * ((size_t)y * w + x);
+                blend(p, RGB(8, 22, 34), cover(y, cy - r - edge, cy + r + edge) * 0.8);
+                blend(p, RGB(226, 222, 212), cover(y, cy - r, cy + r));
+            }
+        }
 }
 
 /* Draws the header (background, WORLD OF WARCRAFT, FOREVER, swash) at
@@ -651,6 +692,7 @@ static HBITMAP make_header(HDC screen, int w, int h)
             bits[4 * ((size_t)y * w + x) + 2] = (unsigned char)(sum[2] / (SCALE * SCALE));
         }
     DeleteObject(big);
+    swash_tails(bits, w, h, w / 2.0, unit * 7 / 2.0, unit * 6 / 5.0 + unit / 10.0, unit * 2.4, unit / 22.0 * 1.2);
     return small;
 }
 
