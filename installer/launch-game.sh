@@ -50,6 +50,11 @@ fi
 SOURCE=$TF_GAME_DIR
 [ -s "$ROOT/components-ready" ] && [ -s "$ROOT/game-ready" ] || exit 5
 [ -s "$PREFIX/system.reg" ] && [ ! -L "$ROOT" ] && [ ! -L "$PREFIX" ] || exit 6
+# After the game was reinstalled into another container, point the staged
+# game's Data and Interface links at the installation found now.
+[ -f "$KIT/installer/stage-game.sh" ] && . "$KIT/installer/stage-game.sh" || exit 7
+tf_follow_install "$SOURCE" "$GAME" ||
+    { print -r -- "STOP: could not point the game at this container's installation (code $?)."; exit 7; }
 # After a Battle.net update the staged executable is stale: copy the new one
 # (and the other executable files) over from the original installation.
 if ! cmp -s "$SOURCE/WowB-ARM64.exe" "$GAME/WowB-ARM64.exe"; then
