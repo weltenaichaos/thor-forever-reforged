@@ -119,7 +119,7 @@ static const wchar_t *in_kit(const wchar_t *rel)
 static const wchar_t *const program_dirs[] = {
     L"C:\\Program Files (x86)", L"C:\\Program Files"
 };
-static HWND menu_window, version_text, status_text, play_button, notice_text;
+static HWND menu_window, version_text, status_text, play_button, notice_text, device_text;
 
 /* Settings that can be changed on the start screen. Each tap on a button
  * moves to the next value and saves it to tuning.conf. */
@@ -476,9 +476,10 @@ static HBITMAP header_cache;
 static int unit;
 static const wchar_t *heading_face = L"Tahoma";
 
-/* A word in the style of the game's logo: ivory to champagne, with a dark
- * bronze outline and a soft shadow, centred on cx, cy. */
-static void logo_word(HDC dc, const wchar_t *word, int cx, int cy)
+/* A word in the style of the game's logo, centred on cx, cy: a metal
+ * gradient (top, middle, bottom colours) with a dark bronze outline and a
+ * soft shadow. */
+static void logo_word(HDC dc, const wchar_t *word, int cx, int cy, const COLORREF metal[3])
 {
     static const struct { int width; COLORREF color; } strokes[] = {
         { 6, RGB(10, 22, 34) }, { 5, RGB(138, 102, 52) }, { 3, RGB(42, 26, 12) }
@@ -515,10 +516,10 @@ static void logo_word(HDC dc, const wchar_t *word, int cx, int cy)
     fill.right = x + size.cx;
     fill.top = y;
     fill.bottom = y + size.cy / 2;
-    fill_gradient(dc, &fill, RGB(255, 253, 242), RGB(241, 228, 194));
+    fill_gradient(dc, &fill, metal[0], metal[1]);
     fill.top = fill.bottom;
     fill.bottom = y + size.cy;
-    fill_gradient(dc, &fill, RGB(241, 228, 194), RGB(176, 140, 84));
+    fill_gradient(dc, &fill, metal[1], metal[2]);
     SelectClipRgn(dc, NULL);
     DeleteObject(region);
 }
@@ -531,10 +532,10 @@ static void dot(HDC dc, double x, double y, double r)
 
 /* The infinity swash under FOREVER: a calligraphic infinity sign (thin
  * where the strokes cross, full on the loops) with tapering lines to both
- * sides, in the logo's teal with a dark edge and a light shine. */
+ * sides, in the same silvery white as FOREVER, with a dark edge. */
 static void swash(HDC dc, int cx, int cy, int half_width, int thickness)
 {
-    static const COLORREF colors[3] = { RGB(8, 26, 42), TF_TEAL, RGB(160, 226, 242) };
+    static const COLORREF colors[3] = { RGB(8, 22, 34), RGB(214, 210, 200), RGB(255, 255, 255) };
     int pass, i, steps = 1600, tail = half_width * 2;
     HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
     for (pass = 0; pass < 3; ++pass) {
@@ -543,7 +544,7 @@ static void swash(HDC dc, int cx, int cy, int half_width, int thickness)
         double grow = pass == 0 ? 1.5 * SCALE : 0, shrink = pass == 2 ? 0.35 : 1, lift = pass == 2 ? 0.35 : 0;
         for (i = 0; i < steps; ++i) {
             double a = 6.283185307 * i / steps, s = sin(a), c = cos(a), d = 1 + s * s;
-            double x = cx + half_width * c / d, y = cy + half_width * 1.25 * s * c / d;
+            double x = cx + half_width * c / d, y = cy + half_width * 1.1 * s * c / d;
             double r = thickness * (0.3 + 0.7 * fabs(c));
             dot(dc, x, y - r * lift, r * shrink + grow);
         }
@@ -594,14 +595,20 @@ static HBITMAP make_header(HDC screen, int w, int h)
                         ANTIALIASED_QUALITY, 0, heading_face);
     forever = CreateFontW(-u * 31 / 20, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                           ANTIALIASED_QUALITY, 0, heading_face);
-    SelectObject(dc, title);
-    SetTextCharacterExtra(dc, u / 12);
-    logo_word(dc, L"WORLD OF WARCRAFT", w * SCALE / 2, u);
-    SelectObject(dc, forever);
-    SetTextCharacterExtra(dc, u / 8);
-    logo_word(dc, L"FOREVER", w * SCALE / 2, u * 46 / 20);
-    SetTextCharacterExtra(dc, 0);
-    swash(dc, w * SCALE / 2, u * 71 / 20, u * 3 / 2, u / 9);
+    {
+        /* Champagne gold like "Warcraft" in the logo, silvery white like its
+         * "Forever". */
+        static const COLORREF gold[3] = { RGB(255, 253, 242), RGB(241, 228, 194), RGB(176, 140, 84) };
+        static const COLORREF white[3] = { RGB(255, 255, 255), RGB(244, 242, 236), RGB(184, 180, 170) };
+        SelectObject(dc, title);
+        SetTextCharacterExtra(dc, u / 12);
+        logo_word(dc, L"WORLD OF WARCRAFT", w * SCALE / 2, u, gold);
+        SelectObject(dc, forever);
+        SetTextCharacterExtra(dc, u / 8);
+        logo_word(dc, L"FOREVER", w * SCALE / 2, u * 46 / 20, white);
+        SetTextCharacterExtra(dc, 0);
+    }
+    swash(dc, w * SCALE / 2, u * 7 / 2, u * 6 / 5, u / 14);
     SelectObject(dc, old);
     DeleteObject(title);
     DeleteObject(forever);
@@ -773,7 +780,8 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_CTLCOLORSTATIC: {
         HDC dc = (HDC)wparam;
         HWND control = (HWND)lparam;
-        SetTextColor(dc, control == notice_text ? TF_WARNING : control == version_text ? TF_GOLD_LIGHT : TF_TEXT);
+        SetTextColor(dc, control == notice_text ? TF_WARNING : control == version_text ? TF_GOLD_LIGHT :
+                         control == device_text ? TF_SKY : TF_TEXT);
         SetBkColor(dc, TF_BACKGROUND);
         return (LRESULT)background_brush;
     }
@@ -831,7 +839,9 @@ static int show_menu(HINSTANCE instance)
         w = client.right;
     }
     y = header_height + u / 2;
-    version_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u, 0, font);
+    version_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, (w - 2 * u) * 2 / 3, u, 0, font);
+    device_text = add_control(window, L"STATIC", L"on the AYN Thor", SS_RIGHT, x + (w - 2 * u) * 2 / 3, y,
+                              (w - 2 * u) / 3, u, 0, button_font);
     y += u;
     status_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u * 2, 0, font);
     y += u * 3;
