@@ -44,6 +44,7 @@ allowed = {
     'installer/create-prefix.sh',
     'installer/stage-game.sh', 'tests/test_game_staging.py',
     'installer/game-copies.sh', 'tests/test_game_copies.py',
+    'installer/install-state.sh', 'tests/test_install_state.py', 'installer/start-install.sh',
     'installer/install-report.sh', 'tests/test_install_report.py',
     'tests/test_checksum_output.py',
     'installer/Config-Thor-Forever.wtf', 'docs/DEPENDENCIES.md',

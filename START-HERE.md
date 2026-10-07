@@ -18,17 +18,25 @@ playing. The installer ZIP includes `Thor-Forever.exe`, `payload` and notices.
 
 ## Install once
 
-1. Extract the complete package so that `Install-Thor-Forever.cmd` is directly
-   inside **Download/Thor-Forever**. Do not leave it inside a second nested folder.
-2. In GameHub, enter the desktop of the container where you installed the game.
-3. Open **Download > Thor-Forever > Install-Thor-Forever.cmd**. When it says
-   **Press any key to continue**, press a key: waiting without pressing it does
-   not start installation. Run this installer only once.
-4. Leave the container open. After a few minutes, open
-   **Thor-Forever > setup-report > result.txt**.
-5. Continue only when the report says `INSTALLER_EXIT=0` and
-   `Preparation finished`. If it says `RUNNING`, wait. If it says `STOPPED`,
-   keep the report and stop; do not delete folders or rerun installation.
+1. Extract the complete package so that `Thor-Forever.exe` and the `payload`
+   and `installer` folders are directly inside **Download/Thor-Forever**. Do
+   not leave them inside a second nested folder.
+2. In GameHub, open the container where you installed the game: **Game
+   Settings > General > Startup File Path**, select
+   **Download/Thor-Forever/Thor-Forever.exe**, and press **Play**.
+3. The start screen says Thor Forever is not installed yet and lists anything
+   that is missing (the game in this container, or install files). When
+   everything is there, press **Install**. It shows each step while it runs;
+   leave it open for the few minutes it takes.
+4. When it says **Installed**, the same button says **Play**.
+
+If installing stops halfway, or the installation is damaged later, the
+button says **Repair**. Repair renames the old installation to
+`release-v1.old-<n>` (nothing is deleted), installs again and copies your
+game settings (the WTF folder) over.
+
+`Install-Thor-Forever.cmd` (run from the container desktop, result in
+`setup-report/result.txt`) still works the same way as before.
 
 The installer prepares a separate environment and game settings. It links the
 existing large game Data rather than downloading a second copy. The shared Data

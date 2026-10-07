@@ -50,6 +50,9 @@ static HFONT font, big_font;
 static int bnet_started, menu_width, menu_height, notice_height;
 static wchar_t notice_buffer[1024];
 static void refresh_copies(void);
+static int refresh_install(void);
+static int install_clicked(HWND window);
+static int quit_while_installing(HWND window);
 
 /* Reads a small text file into buffer, NUL-terminated. */
 static int read_text(const wchar_t *path, char *buffer, DWORD size)
@@ -327,7 +330,7 @@ static void refresh(void)
         SetWindowTextW(status_text, L"Battle.net is closed. The version above is now installed.");
     else
         SetWindowTextW(status_text, L"Press Update with Battle.net to check for a game update.");
-    refresh_copies();
+    if (!refresh_install()) refresh_copies();
 }
 
 static HWND add_control(HWND parent, const wchar_t *cls, const wchar_t *text, DWORD style,
@@ -346,6 +349,8 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
         switch (LOWORD(wparam)) {
         case ID_PLAY:
         case IDOK:
+            /* Install or Repair while Thor Forever is not ready to play. */
+            if (install_clicked(window)) return 0;
             if (battle_net_open() &&
                 MessageBoxW(window, L"Battle.net is still open. If it is updating the game, "
                             L"starting now breaks the update.\n\nClose Battle.net and start the game?",
@@ -373,6 +378,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
             return 0;
         case ID_QUIT:
         case IDCANCEL:
+            if (!quit_while_installing(window)) return 0;
             DestroyWindow(window);
             PostQuitMessage(ID_QUIT);
             return 0;
@@ -382,6 +388,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
         refresh();
         return 0;
     case WM_CLOSE:
+        if (!quit_while_installing(window)) return 0;
         DestroyWindow(window);
         PostQuitMessage(ID_QUIT);
         return 0;
@@ -416,7 +423,7 @@ static int show_menu(HINSTANCE instance)
     menu_window = window;
     menu_width = w;
     menu_height = h;
-    notice_height = 4 * u;
+    notice_height = 5 * u;
     {
         RECT client;
         GetClientRect(window, &client);
@@ -445,7 +452,7 @@ static int show_menu(HINSTANCE instance)
                 x + 2 * (bw + u), y, bw, u * 3, ID_QUIT, font);
     /* Shown only when the game is installed in more than one container. */
     y += u * 4;
-    notice_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u * 3, 0, font);
+    notice_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u * 4, 0, font);
     ShowWindow(notice_text, SW_HIDE);
     refresh();
     SetTimer(window, ID_REFRESH, 2000, NULL);
@@ -612,6 +619,209 @@ static void refresh_copies(void)
     } else {
         show_notice(0);
     }
+}
+
+/* Install and Repair. The waiting bridge writes logs\\ENTRY-<token>.state
+ * (installer/install-state.sh): STATE installed|missing|broken, GAME
+ * found|missing|multiple, PAYLOAD ok|missing <files>. When it is not
+ * installed, Play becomes Install (or Repair); pressing it asks the bridge
+ * (.install / .repair) to run installer/start-install.sh. While that runs,
+ * .progress holds "<uptime> <phase>"; the result comes in .installed. */
+enum { STATE_UNKNOWN, STATE_INSTALLED, STATE_MISSING, STATE_BROKEN };
+static int install_state, game_state, payload_ok, installing;
+static char payload_missing[256];
+static unsigned long install_beat;
+static ULONGLONG install_seen;
+static wchar_t install_message[512];
+
+static void read_state(void)
+{
+    static char data[1024];
+    wchar_t path[512];
+    char *line, *end;
+    entry_path(path, bridge_token, L"state");
+    if (!read_text(path, data, sizeof(data))) return;
+    payload_ok = 0;
+    for (line = data; *line; line = *end ? end + 1 : end) {
+        end = line + strcspn(line, "\r\n");
+        if (!strncmp(line, "STATE installed", 15)) install_state = STATE_INSTALLED;
+        else if (!strncmp(line, "STATE missing", 13)) install_state = STATE_MISSING;
+        else if (!strncmp(line, "STATE broken", 12)) install_state = STATE_BROKEN;
+        else if (!strncmp(line, "GAME found", 10)) game_state = 1;
+        else if (!strncmp(line, "GAME multiple", 13)) game_state = 2;
+        else if (!strncmp(line, "GAME missing", 12)) game_state = 0;
+        else if (!strncmp(line, "PAYLOAD ok", 10)) payload_ok = 1;
+        else if (!strncmp(line, "PAYLOAD missing", 15)) {
+            size_t n = (size_t)(end - line) - 15;
+            if (n >= sizeof(payload_missing)) n = sizeof(payload_missing) - 1;
+            memcpy(payload_missing, line + 15, n);
+            payload_missing[n] = 0;
+        }
+    }
+}
+
+static const wchar_t *phase_text(const char *phase, int *step)
+{
+    static const char *const names[] = {
+        "payload", "storage", "extraction", "components", "prefix", "dxvk", "game", "prepared"
+    };
+    static const wchar_t *const texts[] = {
+        L"checking the install files", L"checking free storage", L"unpacking Wine",
+        L"copying the graphics driver", L"setting up the Windows environment", L"installing DXVK",
+        L"preparing the game and its settings", L"finishing"
+    };
+    int i;
+    for (i = 0; i < 8; ++i)
+        if (!strcmp(phase, names[i])) { *step = i + 1; return texts[i]; }
+    *step = 0;
+    return L"starting";
+}
+
+/* What is needed before installing, or 0 if everything is there. */
+static int install_blocker(wchar_t *text, size_t size)
+{
+    wchar_t files[256];
+    int i;
+    if (game_state == 0) {
+        swprintf(text, size, L"The game is not installed in this GameHub container. Install it with "
+                 L"Battle.net first (Update with Battle.net), then come back here.");
+        return 1;
+    }
+    if (game_state == 2) {
+        swprintf(text, size, L"The game is in several GameHub containers, but not in this one. "
+                 L"Start Thor Forever from the container you play in.");
+        return 1;
+    }
+    if (!payload_ok) {
+        for (i = 0; payload_missing[i] && i < 255; ++i) files[i] = (unsigned char)payload_missing[i];
+        files[i] = 0;
+        swprintf(text, size, L"These install files are missing in Download/Thor-Forever/payload:%ls. "
+                 L"Copy the complete Thor Forever package there.", files);
+        return 1;
+    }
+    return 0;
+}
+
+/* Updates the start screen for installing; returns 1 if it uses the note. */
+static int refresh_install(void)
+{
+    static char data[4096];
+    static wchar_t text[1024], details[4096];
+    wchar_t path[512];
+    if (!bridge_waiting) return 0;
+    if (installing) {
+        entry_path(path, bridge_token, L"installed");
+        if (read_text(path, data, sizeof(data))) {
+            char *rest = strchr(data, '\n');
+            int code = atoi(data);
+            /* Left for the bridge, which removes it before the next run. */
+            installing = 0;
+            install_state = STATE_UNKNOWN;
+            if (!rest || !MultiByteToWideChar(CP_UTF8, 0, rest + 1, -1, details, 3000)) details[0] = 0;
+            details[3000] = 0;
+            for (size_t n = wcslen(details); n && (details[n - 1] == '\n' || details[n - 1] == '\r' ||
+                                                   details[n - 1] == ' '); --n)
+                details[n - 1] = 0;
+            if (code == 0) {
+                swprintf(install_message, 512, L"%ls Press Play to start the game.", details);
+            } else {
+                swprintf(install_message, 512, L"Installing stopped (code %d). Press Repair to try again.", code);
+                swprintf(text, 1024, L"%ls\n\nDetails:\n", install_message);
+                wcsncat(text, details, 1023 - wcslen(text));
+                MessageBoxW(menu_window, text, L"Thor Forever", MB_OK | MB_ICONWARNING);
+            }
+        } else {
+            unsigned long beat = 0;
+            char phase[64] = "";
+            int step;
+            entry_path(path, bridge_token, L"progress");
+            if (read_text(path, data, 128) && sscanf(data, "%lu %63s", &beat, phase) == 2 && beat != install_beat) {
+                const wchar_t *what = phase_text(phase, &step);
+                install_beat = beat;
+                install_seen = GetTickCount64();
+                if (step)
+                    swprintf(text, 1024, L"Installing, step %d of 8: %ls. This takes a few minutes; "
+                             L"leave Thor Forever open.", step, what);
+                else
+                    swprintf(text, 1024, L"Installing: %ls. This takes a few minutes; leave Thor Forever open.", what);
+                SetWindowTextW(notice_text, text);
+            } else if (GetTickCount64() - install_seen > 90000) {
+                installing = 0;
+                install_state = STATE_UNKNOWN;
+                swprintf(install_message, 512, L"Installing stopped responding. Close Thor Forever, start it "
+                         L"again from GameHub and press Repair.");
+            }
+            SetWindowTextW(status_text, L"Installing Thor Forever...");
+            show_notice(1);
+            return 1;
+        }
+    }
+    read_state();
+    EnableWindow(play_button, TRUE);
+    switch (install_state) {
+    case STATE_MISSING:
+        SetWindowTextW(play_button, L"Install");
+        SetWindowTextW(status_text, L"Thor Forever is not installed in this GameHub container yet.");
+        if (!install_blocker(text, 1024))
+            swprintf(text, 1024, L"%ls%lsEverything needed is there. Press Install: it takes a few minutes "
+                     L"and needs about 3 GB of free storage.", install_message, install_message[0] ? L" " : L"");
+        break;
+    case STATE_BROKEN:
+        SetWindowTextW(play_button, L"Repair");
+        SetWindowTextW(status_text, L"The Thor Forever installation is unfinished or damaged.");
+        if (!install_blocker(text, 1024))
+            swprintf(text, 1024, L"%ls%lsRepair sets the damaged installation aside (nothing is deleted), "
+                     L"installs again and keeps your game settings.", install_message, install_message[0] ? L" " : L"");
+        break;
+    default:
+        SetWindowTextW(play_button, L"Play");
+        if (!install_message[0]) return 0;
+        wcscpy(text, install_message);
+        break;
+    }
+    SetWindowTextW(notice_text, text);
+    show_notice(1);
+    return 1;
+}
+
+/* Quit while installing: asks first. Returns 1 to quit. */
+static int quit_while_installing(HWND window)
+{
+    if (!installing) return 1;
+    return MessageBoxW(window, L"Thor Forever is still installing. If you quit now, the installation may stay "
+                       L"unfinished; Repair can redo it next time.\n\nQuit anyway?",
+                       L"Thor Forever", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES;
+}
+
+/* Play pressed: starts Install or Repair instead when needed. Returns 1 if
+ * it handled the click. */
+static int install_clicked(HWND window)
+{
+    wchar_t path[512], text[1024];
+    if (installing) return 1;
+    if (install_state != STATE_MISSING && install_state != STATE_BROKEN) return 0;
+    if (install_blocker(text, 1024)) {
+        MessageBoxW(window, text, L"Thor Forever", MB_OK | MB_ICONINFORMATION);
+        return 1;
+    }
+    if (install_state == STATE_BROKEN &&
+        MessageBoxW(window, L"Repair Thor Forever?\n\nThe damaged installation is set aside (nothing is deleted), "
+                    L"a new one is made, and your game settings are copied over. This takes a few minutes.",
+                    L"Thor Forever", MB_YESNO | MB_ICONQUESTION) != IDYES)
+        return 1;
+    entry_path(path, bridge_token, install_state == STATE_BROKEN ? L"repair" : L"install");
+    if (!touch(path)) {
+        MessageBoxW(window, L"Could not start the installation.", L"Thor Forever", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    installing = 1;
+    install_beat = 0;
+    install_seen = GetTickCount64();
+    install_message[0] = 0;
+    EnableWindow(play_button, FALSE);
+    SetWindowTextW(play_button, L"Installing...");
+    SetWindowTextW(notice_text, L"Installing: starting.");
+    return 1;
 }
 
 /* Starts the game and waits for it, as GameHub tracks this process. */
