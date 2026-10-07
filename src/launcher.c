@@ -141,8 +141,9 @@ static HBRUSH background_brush;
 static int header_height;
 
 /* Colours of the start screen, after World of Warcraft: Forever: deep sky
- * blue, light sky, cream headings and the teal of its logo (colours only;
- * no game artwork or fonts are used). */
+ * blue, light sky, cream, the teal of its logo and gold trim (colours only;
+ * no game artwork is used). Headings and buttons use Cinzel (fonts/, SIL
+ * Open Font License, notices/CINZEL-OFL.txt), a free Roman-capitals font. */
 #define TF_BACKGROUND RGB(16, 38, 59)
 #define TF_HEADER_TOP RGB(65, 110, 151)
 #define TF_CREAM RGB(243, 238, 226)
@@ -153,6 +154,10 @@ static int header_height;
 #define TF_TEAL RGB(52, 186, 215)
 #define TF_TEAL_DARK RGB(32, 129, 165)
 #define TF_WARNING RGB(224, 163, 53)
+#define TF_GOLD RGB(224, 163, 53)
+#define TF_GOLD_LIGHT RGB(243, 212, 138)
+
+static HFONT button_font;
 static int bnet_started, menu_width, menu_height, notice_height;
 static wchar_t notice_buffer[1024];
 static void refresh_copies(void);
@@ -462,12 +467,12 @@ static void frame(HDC dc, RECT r, COLORREF color)
     DeleteObject(brush);
 }
 
-/* A small light-blue diamond, centred on x, y. */
+/* A small gold diamond, centred on x, y. */
 static void diamond(HDC dc, int x, int y, int size)
 {
     POINT points[4] = { { x, y - size }, { x + size, y }, { x, y + size }, { x - size, y } };
-    HBRUSH brush = CreateSolidBrush(TF_SKY_DARK), old_brush = SelectObject(dc, brush);
-    HPEN pen = CreatePen(PS_SOLID, 1, TF_SKY), old_pen = SelectObject(dc, pen);
+    HBRUSH brush = CreateSolidBrush(TF_GOLD), old_brush = SelectObject(dc, brush);
+    HPEN pen = CreatePen(PS_SOLID, 1, TF_GOLD_LIGHT), old_pen = SelectObject(dc, pen);
     Polygon(dc, points, 4);
     SelectObject(dc, old_brush);
     SelectObject(dc, old_pen);
@@ -475,10 +480,10 @@ static void diamond(HDC dc, int x, int y, int size)
     DeleteObject(pen);
 }
 
-/* The infinity sign of the Forever logo, centred on x, y, in teal. */
+/* The infinity sign of the Forever logo, centred on x, y, in gold. */
 static void infinity(HDC dc, int x, int y, int size)
 {
-    HPEN pen = CreatePen(PS_SOLID, size / 4 > 1 ? size / 4 : 2, TF_TEAL), old_pen = SelectObject(dc, pen);
+    HPEN pen = CreatePen(PS_SOLID, size / 4 > 1 ? size / 4 : 2, TF_GOLD), old_pen = SelectObject(dc, pen);
     HBRUSH old_brush = SelectObject(dc, CreateSolidBrush(TF_BACKGROUND));
     Ellipse(dc, x - 2 * size, y - size * 3 / 4, x + size / 8, y + size * 3 / 4);
     Ellipse(dc, x - size / 8, y - size * 3 / 4, x + 2 * size, y + size * 3 / 4);
@@ -487,7 +492,41 @@ static void infinity(HDC dc, int x, int y, int size)
     DeleteObject(pen);
 }
 
-/* Background, light frame and the title header. */
+/* Text centred in r, filled with a gold gradient over a dark shadow. */
+static void gold_text(HDC dc, const wchar_t *text, const RECT *r)
+{
+    int length = (int)wcslen(text), x, y;
+    SIZE size;
+    HRGN region;
+    RECT fill;
+    GetTextExtentPoint32W(dc, text, length, &size);
+    x = r->left + (r->right - r->left - size.cx) / 2;
+    y = r->top + (r->bottom - r->top - size.cy) / 2;
+    SetTextColor(dc, RGB(6, 16, 26));
+    TextOutW(dc, x + 2, y + 2, text, length);
+    BeginPath(dc);
+    TextOutW(dc, x, y, text, length);
+    EndPath(dc);
+    region = PathToRegion(dc);
+    if (!region) {
+        SetTextColor(dc, TF_GOLD);
+        TextOutW(dc, x, y, text, length);
+        return;
+    }
+    SelectClipRgn(dc, region);
+    fill.left = x;
+    fill.right = x + size.cx;
+    fill.top = y;
+    fill.bottom = y + size.cy / 2;
+    fill_gradient(dc, &fill, RGB(255, 243, 196), RGB(240, 192, 80));
+    fill.top = fill.bottom;
+    fill.bottom = y + size.cy;
+    fill_gradient(dc, &fill, RGB(240, 192, 80), RGB(170, 112, 34));
+    SelectClipRgn(dc, NULL);
+    DeleteObject(region);
+}
+
+/* Background, gold and light frame and the title header. */
 static void paint_menu(HWND window)
 {
     PAINTSTRUCT ps;
@@ -501,28 +540,29 @@ static void paint_menu(HWND window)
     header = client;
     header.bottom = header_height;
     fill_gradient(dc, &header, TF_HEADER_TOP, TF_BACKGROUND);
-    frame(dc, client, TF_SKY_DARK);
+    frame(dc, client, TF_GOLD);
+    InflateRect(&client, -1, -1);
+    frame(dc, client, RGB(120, 84, 28));
     InflateRect(&client, -3, -3);
-    frame(dc, client, TF_EDGE);
+    frame(dc, client, TF_SKY_DARK);
     SetBkMode(dc, TRANSPARENT);
     SelectObject(dc, title_font);
-    SetTextColor(dc, TF_CREAM);
-    SetTextCharacterExtra(dc, gap / 2);
+    SetTextCharacterExtra(dc, gap / 3);
     text = header;
     text.top = gap;
     text.bottom = header_height * 5 / 8;
-    DrawTextW(dc, L"WORLD OF WARCRAFT", -1, &text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    SelectObject(dc, small_font);
-    SetTextColor(dc, TF_SKY);
+    gold_text(dc, L"WORLD OF WARCRAFT", &text);
+    SelectObject(dc, button_font);
+    SetTextColor(dc, TF_CREAM);
     SetTextCharacterExtra(dc, gap / 4);
     text.top = text.bottom;
     text.bottom = header_height - gap;
-    DrawTextW(dc, L"FOREVER  \x00b7  ON THE AYN THOR", -1, &text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    DrawTextW(dc, L"Forever  \x00b7  on the AYN Thor", -1, &text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     SetTextCharacterExtra(dc, 0);
     /* Divider: light line with the infinity sign in the middle. */
     {
         RECT line = { w / 6, header_height, w / 2 - 3 * gap, header_height + 1 };
-        HBRUSH brush = CreateSolidBrush(TF_SKY_DARK);
+        HBRUSH brush = CreateSolidBrush(TF_GOLD);
         FillRect(dc, &line, brush);
         line.left = w / 2 + 3 * gap;
         line.right = w * 5 / 6;
@@ -551,12 +591,12 @@ static void draw_button(const DRAWITEMSTRUCT *d)
     if (disabled) {
         top = RGB(44, 58, 72); bottom = RGB(34, 46, 58); edge = RGB(70, 88, 106); ink = RGB(128, 146, 162);
     } else if (play) {
-        top = TF_TEAL; bottom = TF_TEAL_DARK; edge = TF_SKY; ink = RGB(255, 255, 255);
+        top = TF_TEAL; bottom = TF_TEAL_DARK; edge = TF_GOLD; ink = RGB(255, 255, 255);
     } else {
         top = RGB(37, 70, 102); bottom = RGB(22, 48, 73); edge = TF_EDGE; ink = TF_TEXT;
     }
     if (pressed) { COLORREF swap = top; top = bottom; bottom = swap; }
-    if (focus && !disabled) edge = TF_CREAM;
+    if (focus && !disabled) edge = TF_GOLD_LIGHT;
     fill_gradient(dc, &r, top, bottom);
     frame(dc, r, edge);
     inner = r;
@@ -576,13 +616,13 @@ static void draw_button(const DRAWITEMSTRUCT *d)
         SetTextColor(dc, disabled ? ink : TF_SKY_DARK);
         DrawTextW(dc, text, -1, &label, DT_CENTER | DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX);
         SelectObject(dc, font);
-        SetTextColor(dc, disabled ? ink : TF_CREAM);
+        SetTextColor(dc, disabled ? ink : TF_GOLD_LIGHT);
         DrawTextW(dc, colon[1] == L' ' ? colon + 2 : colon + 1, -1, &value,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     } else {
         RECT measure = r;
         int height;
-        SelectObject(dc, play ? big_font : font);
+        SelectObject(dc, play ? big_font : button_font);
         SetTextColor(dc, ink);
         InflateRect(&measure, -4, 0);
         height = DrawTextW(dc, text, -1, &measure, DT_CENTER | DT_WORDBREAK | DT_CALCRECT | DT_NOPREFIX);
@@ -659,7 +699,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_CTLCOLORSTATIC: {
         HDC dc = (HDC)wparam;
         HWND control = (HWND)lparam;
-        SetTextColor(dc, control == notice_text ? TF_WARNING : control == version_text ? TF_SKY : TF_TEXT);
+        SetTextColor(dc, control == notice_text ? TF_WARNING : control == version_text ? TF_GOLD_LIGHT : TF_TEXT);
         SetBkColor(dc, TF_BACKGROUND);
         return (LRESULT)background_brush;
     }
@@ -684,15 +724,19 @@ static int show_menu(HINSTANCE instance)
     if (w < 24 * u) w = 24 * u < sw ? 24 * u : sw;
     header_height = u * 3;
     h = header_height + u * 23 / 2;
-    title_font = CreateFontW(-u * 5 / 4, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
-                             CLEARTYPE_QUALITY, 0, L"Tahoma");
+    /* Cinzel from fonts/, for this program only; Tahoma when it is missing. */
+    const wchar_t *heading = AddFontResourceExW(in_kit(L"\\fonts\\Cinzel-Bold.ttf"), FR_PRIVATE, 0) ? L"Cinzel" : L"Tahoma";
+    title_font = CreateFontW(-u * 3 / 2, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                             ANTIALIASED_QUALITY, 0, heading);
+    button_font = CreateFontW(-u * 2 / 3, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                              ANTIALIASED_QUALITY, 0, heading);
     small_font = CreateFontW(-u / 2, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                              CLEARTYPE_QUALITY, 0, L"Tahoma");
     background_brush = CreateSolidBrush(TF_BACKGROUND);
     font = CreateFontW(-u * 2 / 3, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                        CLEARTYPE_QUALITY, 0, L"Tahoma");
     big_font = CreateFontW(-u, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
-                           CLEARTYPE_QUALITY, 0, L"Tahoma");
+                           ANTIALIASED_QUALITY, 0, heading);
     wc.lpfnWndProc = window_proc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
@@ -750,6 +794,7 @@ static int show_menu(HINSTANCE instance)
     DeleteObject(big_font);
     DeleteObject(small_font);
     DeleteObject(title_font);
+    DeleteObject(button_font);
     DeleteObject(background_brush);
     return (int)msg.wParam;
 }

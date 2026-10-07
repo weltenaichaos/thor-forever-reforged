@@ -21,3 +21,8 @@ or notice obligations. Preserve applicable notices when redistributing.
 The scoped no-OpenGL shim in `src/` is original utility code, not a copy of
 Mesa's OpenGL implementation. Its inclusion does not grant rights to distribute
 unrelated OpenGL libraries.
+
+`fonts/Cinzel-Bold.ttf` is the Cinzel font by The Cinzel Project Authors
+(https://github.com/NDISCOVER/Cinzel), the Bold instance of Google Fonts'
+variable Cinzel, licensed under the SIL Open Font License 1.1
+(`notices/CINZEL-OFL.txt`). The start screen uses it for headings and buttons.

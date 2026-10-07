@@ -28,7 +28,7 @@ allowed = {
     'tools/package-candidate.ps1',
     'tests/test_release_layout.py',
     'START-HERE.md', 'patches/mesa-windows-host.patch',
-    'notices/ANDROID-SHMEM-LICENSE.txt',
+    'notices/ANDROID-SHMEM-LICENSE.txt', 'notices/CINZEL-OFL.txt', 'fonts/Cinzel-Bold.ttf',
     'notices/ANDROID-NDK-NOTICE.txt', 'notices/MINGW-RUNTIME.txt',
     'notices/DIRECTX-HEADERS.txt', 'notices/SPIRV-HEADERS.txt',
     'notices/VULKAN-HEADERS.md', 'notices/vulkan/Apache-2.0.txt',
