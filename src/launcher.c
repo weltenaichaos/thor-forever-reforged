@@ -51,6 +51,7 @@ static HFONT font, big_font;
 static int bnet_started, removing, menu_width, menu_height, notice_height;
 static void refresh_copies(void);
 static void remove_other_copy(HWND window);
+static int stop_removal(HWND window);
 
 /* Reads a small text file into buffer, NUL-terminated. */
 static int read_text(const wchar_t *path, char *buffer, DWORD size)
@@ -369,7 +370,8 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
             }
             return 0;
         case ID_REMOVE:
-            remove_other_copy(window);
+            if (removing) stop_removal(window);
+            else remove_other_copy(window);
             return 0;
         case ID_SETTING:
         case ID_SETTING + 1:
@@ -378,11 +380,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
             return 0;
         case ID_QUIT:
         case IDCANCEL:
-            if (removing) {
-                MessageBoxW(window, L"The other game copy is still being removed. Wait until it's done.",
-                            L"Thor Forever", MB_OK | MB_ICONINFORMATION);
-                return 0;
-            }
+            if (removing && !stop_removal(window)) return 0;
             DestroyWindow(window);
             PostQuitMessage(ID_QUIT);
             return 0;
@@ -392,11 +390,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
         refresh();
         return 0;
     case WM_CLOSE:
-        if (removing) {
-            MessageBoxW(window, L"The other game copy is still being removed. Wait until it's done.",
-                        L"Thor Forever", MB_OK | MB_ICONINFORMATION);
-            return 0;
-        }
+        if (removing && !stop_removal(window)) return 0;
         DestroyWindow(window);
         PostQuitMessage(ID_QUIT);
         return 0;
@@ -431,7 +425,7 @@ static int show_menu(HINSTANCE instance)
     menu_window = window;
     menu_width = w;
     menu_height = h;
-    notice_height = 4 * u;
+    notice_height = 5 * u;
     {
         RECT client;
         GetClientRect(window, &client);
@@ -460,7 +454,7 @@ static int show_menu(HINSTANCE instance)
                 x + 2 * (bw + u), y, bw, u * 3, ID_QUIT, font);
     /* Shown only when the game is installed in more than one container. */
     y += u * 4;
-    notice_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, 2 * bw + u, u * 3, 0, font);
+    notice_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, 2 * bw + u, u * 4, 0, font);
     remove_button = add_control(window, L"BUTTON", L"Remove other copy", BS_PUSHBUTTON | WS_TABSTOP,
                                 x + 2 * (bw + u), y, bw, u * 2, ID_REMOVE, font);
     ShowWindow(notice_text, SW_HIDE);
@@ -579,6 +573,10 @@ static void cancel_bridge(void)
  * (.remove); the answer comes back in .removed. */
 static char other_name[128];
 static wchar_t notice_message[512];
+/* While removing: the bridge's last uptime in .progress, and when it last
+ * changed. No change for a minute means the bridge is gone. */
+static unsigned long removal_beat;
+static ULONGLONG removal_seen;
 
 static int container_name_ok(const char *name)
 {
@@ -629,13 +627,36 @@ static void refresh_copies(void)
         static wchar_t details[4096];
         char *rest;
         entry_path(path, bridge_token, L"removed");
-        if (!read_text(path, result, sizeof(result))) return;
+        if (!read_text(path, result, sizeof(result))) {
+            unsigned long beat = 0;
+            long freed = 0;
+            entry_path(path, bridge_token, L"progress");
+            if (read_text(path, result, 64) && sscanf(result, "%lu %ld", &beat, &freed) == 2 &&
+                beat != removal_beat) {
+                removal_beat = beat;
+                removal_seen = GetTickCount64();
+                swprintf(text, 1024, L"Removing the other game copy: %.1f GB freed so far. "
+                         L"Play works again when it's done.", (freed > 0 ? freed : 0) / (1024.0 * 1024.0));
+                SetWindowTextW(notice_text, text);
+            }
+            if (GetTickCount64() - removal_seen < 60000) return;
+            /* The bridge stopped reporting: it is not running any more. */
+            removing = 0;
+            EnableWindow(play_button, TRUE);
+            SetWindowTextW(remove_button, L"Remove other copy");
+            swprintf(notice_message, 512, L"The removal stopped responding. Close Thor Forever, "
+                     L"start it again from GameHub and try once more.");
+            SetWindowTextW(notice_text, notice_message);
+            show_notice(1, 0);
+            return;
+        }
         DeleteFileW(path);
         removing = 0;
         EnableWindow(play_button, TRUE);
-        EnableWindow(remove_button, TRUE);
         if (atoi(result) == 0 && result[0] == '0') {
             swprintf(notice_message, 512, L"The other game copy was removed.");
+        } else if (atoi(result) == 130) {
+            swprintf(notice_message, 512, L"Removing was stopped. What is left can be removed next time.");
         } else {
             swprintf(notice_message, 512, L"Could not remove the other game copy (code %d).", atoi(result));
             /* The bridge adds what happened after the code; show it here,
@@ -739,11 +760,26 @@ static void remove_other_copy(HWND window)
         return;
     }
     removing = 1;
+    removal_beat = 0;
+    removal_seen = GetTickCount64();
     notice_message[0] = 0;
     EnableWindow(play_button, FALSE);
-    EnableWindow(remove_button, FALSE);
-    SetWindowTextW(notice_text, L"Removing the other game copy. This can take a few minutes; "
-                                L"Play works again when it's done.");
+    SetWindowTextW(remove_button, L"Stop removing");
+    SetWindowTextW(notice_text, L"Removing the other game copy. Play works again when it's done.");
+}
+
+/* Asks the bridge to stop removing (also before quitting). Returns 1 if
+ * the player agreed. */
+static int stop_removal(HWND window)
+{
+    wchar_t path[512];
+    if (MessageBoxW(window, L"Stop removing the other game copy?\n\nWhat is left can be removed next time.",
+                    L"Thor Forever", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+        return 0;
+    entry_path(path, bridge_token, L"stop");
+    touch(path);
+    SetWindowTextW(notice_text, L"Stopping...");
+    return 1;
 }
 
 /* Starts the game and waits for it, as GameHub tracks this process. */

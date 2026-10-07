@@ -39,7 +39,7 @@ if [ "${2-}" = wait ]; then
     while [ ! -e "$tf_at.go" ]; do
         read -r tf_up _ </proc/uptime
         if [ -e "$tf_at.quit" ] || [ "${tf_up%%.*}" -ge "$tf_end" ]; then
-            [ -z "$tf_sizer" ] || kill "$tf_sizer" 2>/dev/null
+            [ -z "$tf_sizer" ] || tf_kill_tree "$tf_sizer"
             # The .log stays for diagnosis; the next launch cleans it up.
             for tf_file in "$tf_at".*; do
                 [ "$tf_file" = "$tf_at.log" ] || rm -f "$tf_file"
@@ -48,12 +48,33 @@ if [ "${2-}" = wait ]; then
         fi
         if [ "$tf_copies" = 1 ] && [ -e "$tf_at.remove" ]; then
             IFS= read -r tf_name <"$tf_at.remove"
-            rm -f "$tf_at.remove"
-            [ -z "$tf_sizer" ] || kill "$tf_sizer" 2>/dev/null
+            rm -f "$tf_at.remove" "$tf_at.stop" "$tf_at.rc"
+            [ -z "$tf_sizer" ] || tf_kill_tree "$tf_sizer"
             tf_sizer=
-            tf_remove_copy "$tf_usr" "$tf_here" "$tf_name" "$tf_usr/home/thor-forever/release-v1/game/_classic_beta_" \
-                >"$tf_at.why" 2>&1
-            tf_result=$?
+            # Deletes in the background. Meanwhile .progress says "<uptime>
+            # <KiB freed so far>" every 2 seconds, so the start screen can
+            # show progress and see that this is still alive; .stop ends it.
+            tf_free0=$(tf_free_kb "$tf_usr/home" "$tf_at.df")
+            (
+                tf_remove_copy "$tf_usr" "$tf_here" "$tf_name" "$tf_usr/home/thor-forever/release-v1/game/_classic_beta_"
+                print -r -- "$?" >"$tf_at.rc"
+            ) >"$tf_at.why" 2>&1 &
+            tf_remover=$!
+            while [ ! -s "$tf_at.rc" ]; do
+                if [ -e "$tf_at.stop" ]; then
+                    tf_kill_tree "$tf_remover"
+                    print -r -- 'Stopped on the start screen. What is left can be removed next time.' >>"$tf_at.why"
+                    print -r -- 130 >"$tf_at.rc"
+                    break
+                fi
+                read -r tf_up _ </proc/uptime
+                tf_free=$(tf_free_kb "$tf_usr/home" "$tf_at.df")
+                print -r -- "${tf_up%%.*} $((tf_free - tf_free0))" >"$tf_at.progress.tmp" &&
+                    mv -f "$tf_at.progress.tmp" "$tf_at.progress"
+                /system/bin/toybox sleep 2 >/dev/null 2>&1 </dev/null
+            done
+            read -r tf_result <"$tf_at.rc"
+            rm -f "$tf_at.rc" "$tf_at.stop" "$tf_at.progress"
             tf_scan_copies "$tf_usr" "$tf_here" "$tf_at.copies"
             # .removed: the result code, then (on failure) the first and last
             # lines of what happened, which the start screen shows.
@@ -80,7 +101,7 @@ if [ "${2-}" = wait ]; then
         fi
         /system/bin/toybox sleep 0.5 >/dev/null 2>&1 </dev/null
     done
-    [ -z "$tf_sizer" ] || kill "$tf_sizer" 2>/dev/null
+    [ -z "$tf_sizer" ] || tf_kill_tree "$tf_sizer"
     rm -f "$tf_at.go" "$tf_at.ready" "$tf_at.copies" "$tf_at.sizes"
 fi
 print -r -- 'STARTED' >"$KIT/logs/ENTRY-$token.started" || exit 3

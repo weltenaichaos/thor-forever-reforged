@@ -107,6 +107,22 @@ class GameCopiesTests(unittest.TestCase):
                     if path.is_dir():
                         path.chmod(0o755)
 
+    def test_kill_tree_ends_grandchildren(self):
+        # The removal runs as a background function whose rm is a grandchild.
+        result = self.run_sh('( sleep 30 & print -r -- $! >gc; wait ) &\n'
+                             'p=$!\n'
+                             'while [ ! -s gc ]; do sleep 0.1; done\n'
+                             'tf_kill_tree "$p"\n'
+                             'sleep 0.3\n'
+                             'read -r gc <gc\n'
+                             'if kill -0 "$gc" 2>/dev/null; then echo alive; else echo gone; fi\n')
+        self.assertEqual(result.stdout.strip(), 'gone', result.stderr)
+
+    def test_free_kb(self):
+        result = self.run_sh('tf_free_kb . df.txt\n')
+        self.assertGreater(int(result.stdout.strip()), 0, result.stderr)
+        self.assertFalse((self.root / 'df.txt').exists())
+
     def test_never_removes_this_containers_copy(self):
         here = self.add_game('a')
         self.add_game('b')

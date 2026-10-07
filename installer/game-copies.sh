@@ -147,3 +147,42 @@ tf_copy_sizes()
     rm -f "$tf_out.du"
     mv -f "$tf_out.tmp" "$tf_out"
 }
+
+# tf_kill_tree PID ends PID and every process started under it (a function
+# running in the background starts its commands as children). Reads /proc
+# with shell builtins only.
+tf_kill_tree()
+{
+    tf_tree=" $1 "
+    tf_more=1
+    while [ "$tf_more" = 1 ]; do
+        tf_more=0
+        for tf_proc in /proc/[0-9]*; do
+            tf_pid=${tf_proc##*/}
+            case "$tf_tree" in *" $tf_pid "*) continue ;; esac
+            tf_stat=
+            read -r tf_stat <"$tf_proc/stat" 2>/dev/null
+            # Fields after the command name: state, parent pid, ...
+            tf_stat=${tf_stat##*) }
+            set -f
+            set -- $tf_stat
+            set +f
+            case "$tf_tree" in *" ${2-none} "*) tf_tree="$tf_tree$tf_pid "; tf_more=1 ;; esac
+        done
+    done
+    for tf_pid in $tf_tree; do kill "$tf_pid" 2>/dev/null; done
+}
+
+# tf_free_kb DIR SCRATCH prints the free KiB on DIR's storage (0 if unknown).
+# Only number lines of df count, as GameHub can add its own text to them.
+tf_free_kb()
+{
+    /system/bin/toybox df -Pk "$1" >"$2" 2>/dev/null </dev/null
+    tf_kb=0
+    while read -r tf_fs tf_blocks tf_used tf_available tf_rest; do
+        case "$tf_available" in ''|*[!0-9]*) continue ;; esac
+        tf_kb=$tf_available
+    done <"$2"
+    rm -f "$2"
+    print -r -- "$tf_kb"
+}
