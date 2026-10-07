@@ -32,6 +32,8 @@ No game files are included here: the game comes from Battle.net, as usual.
    Do not use **Code > Download ZIP**: that is only the source code.
 6. Extract the zip into your **Download** folder, so that you get
    **Download/Thor-Forever** with `Thor-Forever.exe` directly inside.
+   Another folder in your internal storage works too (no spaces in its
+   path); then use that folder in the next step.
 7. In GameHub, open the same container's **Game Settings > General >
    Startup File Path**, select **Download/Thor-Forever/Thor-Forever.exe**
    and press **Play**. Write down the old Startup File Path first, so you
@@ -45,6 +47,18 @@ From then on, pressing **Play** in GameHub opens this start screen. Game
 updates go through its **Update with Battle.net** button. If something
 breaks, the button offers **Repair**. More details:
 [START-HERE.md](START-HERE.md) and [troubleshooting](docs/TROUBLESHOOTING.md).
+
+**Moving the Thor-Forever folder later:** **copy** it, never cut or move
+it. GameHub Lite hides the game's settings as soon as its Startup File Path
+points to a file that is gone, so you could no longer change the path
+(copying the folder back to its old place brings the settings back).
+
+1. Close Thor Forever and **copy** the whole Thor-Forever folder to the new
+   place.
+2. In GameHub, set the Startup File Path to the copied `Thor-Forever.exe`.
+3. Press **Play** and check that the start screen opens.
+4. Only then delete the old folder yourself. Nothing has to be installed
+   again.
 
 ---
 
