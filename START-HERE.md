@@ -45,6 +45,12 @@ is not read-only. Never point Battle.net or an updater at this separate layout.
    - **FPS cap**, **Overlay** and **Measuring** change those settings in
      `tuning.conf`. Each tap moves to the next value.
    - **Quit** closes the start screen without playing.
+   - If the game is installed in more than one GameHub container (this can
+     happen after reinstalling the game or the container), a note at the
+     bottom says so. You always play from the copy in the container you
+     started from. To free the other copy's storage, delete that container
+     in GameHub. Thor Forever does not delete it itself: from inside
+     GameHub, such a delete removed other files instead.
 2. Log in yourself, choose your controls and play briefly.
 3. Exit through **WoW's menu > Exit Game**, then reopen the launcher and check
    that your controls/settings remain selected.

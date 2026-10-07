@@ -43,6 +43,7 @@ allowed = {
     'installer/check-setup.sh', 'installer/Check-Setup.cmd',
     'installer/create-prefix.sh',
     'installer/stage-game.sh', 'tests/test_game_staging.py',
+    'installer/game-copies.sh', 'tests/test_game_copies.py',
     'installer/install-report.sh', 'tests/test_install_report.py',
     'tests/test_checksum_output.py',
     'installer/Config-Thor-Forever.wtf', 'docs/DEPENDENCIES.md',

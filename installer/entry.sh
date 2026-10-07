@@ -12,18 +12,33 @@ exec >"$KIT/logs/ENTRY-$token.log" 2>&1 </dev/null
 # Once Battle.net has run, GameHub no longer starts this script, so it has
 # to be running before then. Gives up after 12 hours.
 if [ "${2-}" = wait ]; then
-    print -r -- 'READY' >"$KIT/logs/ENTRY-$token.ready" || exit 3
+    tf_at="$KIT/logs/ENTRY-$token"
+    # With the game in several containers, list the copies for the start
+    # screen (.copies, see installer/game-copies.sh), which shows a note.
+    tf_usr=/data/user/0/com.ludashi.aibench/files/usr
+    case "${WINEPREFIX-}" in
+        /data/user/*/com.ludashi.aibench/files/usr/*) tf_usr=${WINEPREFIX%%/files/usr/*}/files/usr ;;
+    esac
+    tf_here=
+    case "${WINEPREFIX-}" in "$tf_usr/home/virtual_containers/"*) tf_here=${WINEPREFIX%/} ;; esac
+    if . "$KIT/installer/discover-game.sh" && . "$KIT/installer/game-copies.sh"; then
+        tf_scan_copies "$tf_usr" "$tf_here" "$tf_at.copies"
+    fi
+    print -r -- 'READY' >"$tf_at.ready" || exit 3
     read -r tf_up _ </proc/uptime
     tf_end=$((${tf_up%%.*} + 43200))
-    while [ ! -e "$KIT/logs/ENTRY-$token.go" ]; do
+    while [ ! -e "$tf_at.go" ]; do
         read -r tf_up _ </proc/uptime
-        if [ -e "$KIT/logs/ENTRY-$token.quit" ] || [ "${tf_up%%.*}" -ge "$tf_end" ]; then
-            rm -f "$KIT/logs/ENTRY-$token".*
+        if [ -e "$tf_at.quit" ] || [ "${tf_up%%.*}" -ge "$tf_end" ]; then
+            # The .log stays for diagnosis; the next launch cleans it up.
+            for tf_file in "$tf_at".*; do
+                [ "$tf_file" = "$tf_at.log" ] || rm -f "$tf_file"
+            done
             exit 0
         fi
         /system/bin/toybox sleep 0.5 >/dev/null 2>&1 </dev/null
     done
-    rm -f "$KIT/logs/ENTRY-$token.go" "$KIT/logs/ENTRY-$token.ready"
+    rm -f "$tf_at.go" "$tf_at.ready" "$tf_at.copies"
 fi
 print -r -- 'STARTED' >"$KIT/logs/ENTRY-$token.started" || exit 3
 /system/bin/sh "$KIT/installer/launch-game.sh"

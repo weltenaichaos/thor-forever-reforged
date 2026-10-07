@@ -28,7 +28,7 @@
 static const wchar_t *const program_dirs[] = {
     L"C:\\Program Files (x86)", L"C:\\Program Files"
 };
-static HWND version_text, status_text, play_button;
+static HWND menu_window, version_text, status_text, play_button, notice_text;
 
 /* Settings that can be changed on the start screen. Each tap on a button
  * moves to the next value and saves it to tuning.conf. */
@@ -47,7 +47,9 @@ static struct setting settings[] = {
 #define SETTING_COUNT (int)(sizeof(settings) / sizeof(*settings))
 static char tuning[65536];
 static HFONT font, big_font;
-static int bnet_started;
+static int bnet_started, menu_width, menu_height, notice_height;
+static wchar_t notice_buffer[1024];
+static void refresh_copies(void);
 
 /* Reads a small text file into buffer, NUL-terminated. */
 static int read_text(const wchar_t *path, char *buffer, DWORD size)
@@ -325,6 +327,7 @@ static void refresh(void)
         SetWindowTextW(status_text, L"Battle.net is closed. The version above is now installed.");
     else
         SetWindowTextW(status_text, L"Press Update with Battle.net to check for a game update.");
+    refresh_copies();
 }
 
 static HWND add_control(HWND parent, const wchar_t *cls, const wchar_t *text, DWORD style,
@@ -410,6 +413,10 @@ static int show_menu(HINSTANCE instance)
     window = CreateWindowExW(WS_EX_APPWINDOW, wc.lpszClassName, L"Thor Forever",
                              WS_POPUP | WS_CAPTION | WS_SYSMENU,
                              (sw - w) / 2, (sh - h) / 2, w, h, NULL, NULL, instance, NULL);
+    menu_window = window;
+    menu_width = w;
+    menu_height = h;
+    notice_height = 4 * u;
     {
         RECT client;
         GetClientRect(window, &client);
@@ -436,6 +443,10 @@ static int show_menu(HINSTANCE instance)
                 x + bw + u, y, bw, u * 3, ID_UPDATE, font);
     add_control(window, L"BUTTON", L"Quit", BS_PUSHBUTTON | WS_TABSTOP,
                 x + 2 * (bw + u), y, bw, u * 3, ID_QUIT, font);
+    /* Shown only when the game is installed in more than one container. */
+    y += u * 4;
+    notice_text = add_control(window, L"STATIC", L"", SS_LEFT, x, y, w - 2 * u, u * 3, 0, font);
+    ShowWindow(notice_text, SW_HIDE);
     refresh();
     SetTimer(window, ID_REFRESH, 2000, NULL);
     ShowWindow(window, SW_SHOW);
@@ -540,6 +551,67 @@ static void cancel_bridge(void)
     if (!bridge_waiting) return;
     entry_path(path, bridge_token, L"quit");
     touch(path);
+}
+
+/* With the game installed in more than one GameHub container, the waiting
+ * bridge lists the copies in logs\\ENTRY-<token>.copies ("HERE", "OTHER",
+ * "LEFTOVER" or "ELSEWHERE" and the container's folder name; see
+ * installer/game-copies.sh), and the start screen shows a note. It does not
+ * offer to delete the other copy: on the device, a delete aimed at another
+ * container from inside GameHub removed files elsewhere (the logs folder). */
+static void show_notice(int on)
+{
+    int shown = IsWindowVisible(notice_text);
+    RECT r;
+    if (on == shown) return;
+    ShowWindow(notice_text, on ? SW_SHOW : SW_HIDE);
+    /* Grows the window, staying centered. */
+    GetWindowRect(menu_window, &r);
+    SetWindowPos(menu_window, NULL, r.left, r.top + (on ? -notice_height : notice_height) / 2,
+                 menu_width, menu_height + (on ? notice_height : 0), SWP_NOZORDER);
+}
+
+static void refresh_copies(void)
+{
+    static char copies[4096];
+    wchar_t path[512], name[24];
+    char *line, *end, *rest;
+    int other = 0, leftover = 0, elsewhere = 0, i;
+    if (!bridge_waiting) return;
+    entry_path(path, bridge_token, L"copies");
+    if (!read_text(path, copies, sizeof(copies))) copies[0] = 0;
+    name[0] = 0;
+    for (line = copies; *line; line = *end ? end + 1 : end) {
+        end = line + strcspn(line, "\r\n");
+        rest = strchr(line, ' ');
+        if (!rest || rest > end) continue;
+        ++rest;
+        if (!strncmp(line, "OTHER ", 6)) ++other;
+        else if (!strncmp(line, "LEFTOVER ", 9)) ++leftover;
+        else if (!strncmp(line, "ELSEWHERE ", 10)) ++elsewhere;
+        else continue;
+        if (!name[0]) {
+            /* The start of the container's name is enough to recognise it. */
+            for (i = 0; i < 14 && rest + i < end; ++i) name[i] = (unsigned char)rest[i];
+            wcscpy(name + i, rest + i < end ? L"..." : L"");
+        }
+    }
+    if (other || leftover) {
+        swprintf(notice_buffer, 1024, other
+                 ? L"The game is also installed in another GameHub container (%ls). You play from the "
+                   L"copy in this container. To free its storage, delete that container in GameHub."
+                 : L"Part of a game copy is still in another GameHub container (%ls). You play from the "
+                   L"copy in this container. To free its storage, delete that container in GameHub.",
+                 name);
+        SetWindowTextW(notice_text, notice_buffer);
+        show_notice(1);
+    } else if (elsewhere) {
+        SetWindowTextW(notice_text, L"The game is installed in other GameHub containers, but not in this "
+                                    L"one. Start Thor Forever from the container you play in.");
+        show_notice(1);
+    } else {
+        show_notice(0);
+    }
 }
 
 /* Starts the game and waits for it, as GameHub tracks this process. */

@@ -156,7 +156,8 @@ for tf_run in "$LOGS"/run-*; do
 done
 
 # Each launch leaves ENTRY-<token>.log/.started/.done in logs/: the
-# handshake Thor-Forever.exe waits on. Holding the lock means every earlier
+# handshake Thor-Forever.exe waits on (and the start screen's .copies about
+# game copies in other containers, plus .sizes/.removed/.rc from test builds). Holding the lock means every earlier
 # launch has ended, so only this launch's set is kept. .tmp files are left
 # alone because a finishing launch renames its .tmp into .done. Sets that
 # older versions left in the kit folder itself are removed as well.
@@ -164,6 +165,7 @@ case "${TF_ENTRY_TOKEN-}" in
     ''|*[!0-9-]*) ;;
     *)
         for tf_entry in "$LOGS"/ENTRY-*.log "$LOGS"/ENTRY-*.started "$LOGS"/ENTRY-*.done \
+            "$LOGS"/ENTRY-*.copies "$LOGS"/ENTRY-*.sizes "$LOGS"/ENTRY-*.removed "$LOGS"/ENTRY-*.rc \
             "$KIT"/ENTRY-*.log "$KIT"/ENTRY-*.started "$KIT"/ENTRY-*.done; do
             [ -f "$tf_entry" ] && [ ! -L "$tf_entry" ] || continue
             [ "$tf_entry" = "$LOGS/${tf_entry##*/}" ] &&
