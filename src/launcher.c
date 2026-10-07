@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 /* SPDX-License-Identifier: MIT
  * Start screen for Thor Forever: shows the installed game version, opens
@@ -136,7 +137,7 @@ static struct setting settings[] = {
 };
 #define SETTING_COUNT (int)(sizeof(settings) / sizeof(*settings))
 static char tuning[65536];
-static HFONT font, big_font, small_font, title_font;
+static HFONT font, big_font, small_font;
 static HBRUSH background_brush;
 static int header_height;
 
@@ -154,8 +155,8 @@ static int header_height;
 #define TF_TEAL RGB(52, 186, 215)
 #define TF_TEAL_DARK RGB(32, 129, 165)
 #define TF_WARNING RGB(224, 163, 53)
-#define TF_GOLD RGB(224, 163, 53)
-#define TF_GOLD_LIGHT RGB(243, 212, 138)
+#define TF_GOLD RGB(201, 168, 106)
+#define TF_GOLD_LIGHT RGB(241, 228, 194)
 
 static HFONT button_font;
 static int bnet_started, menu_width, menu_height, notice_height;
@@ -467,111 +468,184 @@ static void frame(HDC dc, RECT r, COLORREF color)
     DeleteObject(brush);
 }
 
-/* A small gold diamond, centred on x, y. */
-static void diamond(HDC dc, int x, int y, int size)
-{
-    POINT points[4] = { { x, y - size }, { x + size, y }, { x, y + size }, { x - size, y } };
-    HBRUSH brush = CreateSolidBrush(TF_GOLD), old_brush = SelectObject(dc, brush);
-    HPEN pen = CreatePen(PS_SOLID, 1, TF_GOLD_LIGHT), old_pen = SelectObject(dc, pen);
-    Polygon(dc, points, 4);
-    SelectObject(dc, old_brush);
-    SelectObject(dc, old_pen);
-    DeleteObject(brush);
-    DeleteObject(pen);
-}
+/* The header is drawn SCALE times larger and then shrunk, which smooths
+ * the letter outlines and the infinity swash (GDI itself draws them with
+ * hard, stair-stepped edges). It is drawn once and kept in header_cache. */
+#define SCALE 3
+static HBITMAP header_cache;
+static int unit;
+static const wchar_t *heading_face = L"Tahoma";
 
-/* The infinity sign of the Forever logo, centred on x, y, in gold. */
-static void infinity(HDC dc, int x, int y, int size)
+/* A word in the style of the game's logo: ivory to champagne, with a dark
+ * bronze outline and a soft shadow, centred on cx, cy. */
+static void logo_word(HDC dc, const wchar_t *word, int cx, int cy)
 {
-    HPEN pen = CreatePen(PS_SOLID, size / 4 > 1 ? size / 4 : 2, TF_GOLD), old_pen = SelectObject(dc, pen);
-    HBRUSH old_brush = SelectObject(dc, CreateSolidBrush(TF_BACKGROUND));
-    Ellipse(dc, x - 2 * size, y - size * 3 / 4, x + size / 8, y + size * 3 / 4);
-    Ellipse(dc, x - size / 8, y - size * 3 / 4, x + 2 * size, y + size * 3 / 4);
-    DeleteObject(SelectObject(dc, old_brush));
-    SelectObject(dc, old_pen);
-    DeleteObject(pen);
-}
-
-/* Text centred in r, filled with a gold gradient over a dark shadow. */
-static void gold_text(HDC dc, const wchar_t *text, const RECT *r)
-{
-    int length = (int)wcslen(text), x, y;
+    static const struct { int width; COLORREF color; } strokes[] = {
+        { 6, RGB(10, 22, 34) }, { 5, RGB(138, 102, 52) }, { 3, RGB(42, 26, 12) }
+    };
+    int length = (int)wcslen(word), x, y, i;
     SIZE size;
     HRGN region;
     RECT fill;
-    GetTextExtentPoint32W(dc, text, length, &size);
-    x = r->left + (r->right - r->left - size.cx) / 2;
-    y = r->top + (r->bottom - r->top - size.cy) / 2;
-    SetTextColor(dc, RGB(6, 16, 26));
-    TextOutW(dc, x + 2, y + 2, text, length);
+    LOGBRUSH ink = { BS_SOLID, 0, 0 };
+    GetTextExtentPoint32W(dc, word, length, &size);
+    x = cx - size.cx / 2;
+    y = cy - size.cy / 2;
+    for (i = 0; i < 3; ++i) {
+        HPEN pen, old;
+        int shift = i == 0 ? 2 * SCALE : 0;
+        ink.lbColor = strokes[i].color;
+        pen = ExtCreatePen(PS_GEOMETRIC | PS_SOLID | PS_JOIN_ROUND | PS_ENDCAP_ROUND,
+                           strokes[i].width * SCALE, &ink, 0, NULL);
+        old = SelectObject(dc, pen);
+        BeginPath(dc);
+        TextOutW(dc, x, y + shift, word, length);
+        EndPath(dc);
+        StrokePath(dc);
+        SelectObject(dc, old);
+        DeleteObject(pen);
+    }
     BeginPath(dc);
-    TextOutW(dc, x, y, text, length);
+    TextOutW(dc, x, y, word, length);
     EndPath(dc);
     region = PathToRegion(dc);
-    if (!region) {
-        SetTextColor(dc, TF_GOLD);
-        TextOutW(dc, x, y, text, length);
-        return;
-    }
+    if (!region) return;
     SelectClipRgn(dc, region);
     fill.left = x;
     fill.right = x + size.cx;
     fill.top = y;
     fill.bottom = y + size.cy / 2;
-    fill_gradient(dc, &fill, RGB(255, 243, 196), RGB(240, 192, 80));
+    fill_gradient(dc, &fill, RGB(255, 253, 242), RGB(241, 228, 194));
     fill.top = fill.bottom;
     fill.bottom = y + size.cy;
-    fill_gradient(dc, &fill, RGB(240, 192, 80), RGB(170, 112, 34));
+    fill_gradient(dc, &fill, RGB(241, 228, 194), RGB(176, 140, 84));
     SelectClipRgn(dc, NULL);
     DeleteObject(region);
 }
 
-/* Background, gold and light frame and the title header. */
+/* A round dot of radius r at x, y. */
+static void dot(HDC dc, double x, double y, double r)
+{
+    Ellipse(dc, (int)(x - r), (int)(y - r), (int)(x + r + 1), (int)(y + r + 1));
+}
+
+/* The infinity swash under FOREVER: a calligraphic infinity sign (thin
+ * where the strokes cross, full on the loops) with tapering lines to both
+ * sides, in the logo's teal with a dark edge and a light shine. */
+static void swash(HDC dc, int cx, int cy, int half_width, int thickness)
+{
+    static const COLORREF colors[3] = { RGB(8, 26, 42), TF_TEAL, RGB(160, 226, 242) };
+    int pass, i, steps = 1600, tail = half_width * 2;
+    HGDIOBJ old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+    for (pass = 0; pass < 3; ++pass) {
+        HBRUSH brush = CreateSolidBrush(colors[pass]);
+        HGDIOBJ old_brush = SelectObject(dc, brush);
+        double grow = pass == 0 ? 1.5 * SCALE : 0, shrink = pass == 2 ? 0.35 : 1, lift = pass == 2 ? 0.35 : 0;
+        for (i = 0; i < steps; ++i) {
+            double a = 6.283185307 * i / steps, s = sin(a), c = cos(a), d = 1 + s * s;
+            double x = cx + half_width * c / d, y = cy + half_width * 1.25 * s * c / d;
+            double r = thickness * (0.3 + 0.7 * fabs(c));
+            dot(dc, x, y - r * lift, r * shrink + grow);
+        }
+        /* Tails, thinning out away from the sign. */
+        for (i = 0; i < tail; i += SCALE / 2 + 1) {
+            double f = 1.0 - (double)i / tail, r = thickness * 0.55 * f + SCALE * 0.4;
+            double off = half_width + thickness * 2 + i;
+            dot(dc, cx - off, cy - r * lift, r * shrink + grow);
+            dot(dc, cx + off, cy - r * lift, r * shrink + grow);
+        }
+        SelectObject(dc, old_brush);
+        DeleteObject(brush);
+    }
+    SelectObject(dc, old_pen);
+}
+
+/* Draws the header (background, WORLD OF WARCRAFT, FOREVER, swash) at
+ * SCALE and shrinks it to w by h, averaging each SCALE x SCALE block. */
+static HBITMAP make_header(HDC screen, int w, int h)
+{
+    BITMAPINFO info = {0};
+    unsigned char *big_bits, *bits;
+    HDC dc = CreateCompatibleDC(screen);
+    HBITMAP big, small;
+    HGDIOBJ old;
+    HFONT title, forever;
+    RECT all = { 0, 0, w * SCALE, h * SCALE };
+    int x, y, bx, by, u = unit * SCALE;
+    info.bmiHeader.biSize = sizeof(info.bmiHeader);
+    info.bmiHeader.biWidth = w * SCALE;
+    info.bmiHeader.biHeight = -h * SCALE;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    big = CreateDIBSection(screen, &info, DIB_RGB_COLORS, (void **)&big_bits, NULL, 0);
+    info.bmiHeader.biWidth = w;
+    info.bmiHeader.biHeight = -h;
+    small = CreateDIBSection(screen, &info, DIB_RGB_COLORS, (void **)&bits, NULL, 0);
+    if (!dc || !big || !small) {
+        if (big) DeleteObject(big);
+        if (small) DeleteObject(small);
+        if (dc) DeleteDC(dc);
+        return NULL;
+    }
+    old = SelectObject(dc, big);
+    fill_gradient(dc, &all, TF_HEADER_TOP, TF_BACKGROUND);
+    SetBkMode(dc, TRANSPARENT);
+    title = CreateFontW(-u * 21 / 20, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                        ANTIALIASED_QUALITY, 0, heading_face);
+    forever = CreateFontW(-u * 31 / 20, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
+                          ANTIALIASED_QUALITY, 0, heading_face);
+    SelectObject(dc, title);
+    SetTextCharacterExtra(dc, u / 12);
+    logo_word(dc, L"WORLD OF WARCRAFT", w * SCALE / 2, u);
+    SelectObject(dc, forever);
+    SetTextCharacterExtra(dc, u / 8);
+    logo_word(dc, L"FOREVER", w * SCALE / 2, u * 46 / 20);
+    SetTextCharacterExtra(dc, 0);
+    swash(dc, w * SCALE / 2, u * 71 / 20, u * 3 / 2, u / 9);
+    SelectObject(dc, old);
+    DeleteObject(title);
+    DeleteObject(forever);
+    DeleteDC(dc);
+    GdiFlush();
+    for (y = 0; y < h; ++y)
+        for (x = 0; x < w; ++x) {
+            unsigned sum[3] = { 0, 0, 0 };
+            for (by = 0; by < SCALE; ++by)
+                for (bx = 0; bx < SCALE; ++bx) {
+                    const unsigned char *p = big_bits + 4 * ((size_t)(y * SCALE + by) * w * SCALE + x * SCALE + bx);
+                    sum[0] += p[0];
+                    sum[1] += p[1];
+                    sum[2] += p[2];
+                }
+            bits[4 * ((size_t)y * w + x)] = (unsigned char)(sum[0] / (SCALE * SCALE));
+            bits[4 * ((size_t)y * w + x) + 1] = (unsigned char)(sum[1] / (SCALE * SCALE));
+            bits[4 * ((size_t)y * w + x) + 2] = (unsigned char)(sum[2] / (SCALE * SCALE));
+        }
+    DeleteObject(big);
+    return small;
+}
+
+/* Background, frame and the header. */
 static void paint_menu(HWND window)
 {
     PAINTSTRUCT ps;
     HDC dc = BeginPaint(window, &ps);
-    RECT client, header, text;
-    int w, gap;
+    RECT client;
     GetClientRect(window, &client);
-    w = client.right;
-    gap = header_height / 8;
     FillRect(dc, &client, background_brush);
-    header = client;
-    header.bottom = header_height;
-    fill_gradient(dc, &header, TF_HEADER_TOP, TF_BACKGROUND);
+    if (!header_cache) header_cache = make_header(dc, client.right, header_height);
+    if (header_cache) {
+        HDC source = CreateCompatibleDC(dc);
+        HGDIOBJ old = SelectObject(source, header_cache);
+        BitBlt(dc, 0, 0, client.right, header_height, source, 0, 0, SRCCOPY);
+        SelectObject(source, old);
+        DeleteDC(source);
+    }
     frame(dc, client, TF_GOLD);
     InflateRect(&client, -1, -1);
-    frame(dc, client, RGB(120, 84, 28));
+    frame(dc, client, RGB(74, 52, 24));
     InflateRect(&client, -3, -3);
     frame(dc, client, TF_SKY_DARK);
-    SetBkMode(dc, TRANSPARENT);
-    SelectObject(dc, title_font);
-    SetTextCharacterExtra(dc, gap / 3);
-    text = header;
-    text.top = gap;
-    text.bottom = header_height * 5 / 8;
-    gold_text(dc, L"WORLD OF WARCRAFT", &text);
-    SelectObject(dc, button_font);
-    SetTextColor(dc, TF_CREAM);
-    SetTextCharacterExtra(dc, gap / 4);
-    text.top = text.bottom;
-    text.bottom = header_height - gap;
-    DrawTextW(dc, L"Forever  \x00b7  on the AYN Thor", -1, &text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-    SetTextCharacterExtra(dc, 0);
-    /* Divider: light line with the infinity sign in the middle. */
-    {
-        RECT line = { w / 6, header_height, w / 2 - 3 * gap, header_height + 1 };
-        HBRUSH brush = CreateSolidBrush(TF_GOLD);
-        FillRect(dc, &line, brush);
-        line.left = w / 2 + 3 * gap;
-        line.right = w * 5 / 6;
-        FillRect(dc, &line, brush);
-        DeleteObject(brush);
-        infinity(dc, w / 2, header_height, gap * 3 / 2);
-        diamond(dc, w / 6, header_height, gap / 2);
-        diamond(dc, w * 5 / 6, header_height, gap / 2);
-    }
     EndPaint(window, &ps);
 }
 
@@ -722,21 +796,20 @@ static int show_menu(HINSTANCE instance)
     int u = sh / 24, w = sw * 3 / 5, h, x = u, y = u, bw, i;
     if (u < 16) u = 16;
     if (w < 24 * u) w = 24 * u < sw ? 24 * u : sw;
-    header_height = u * 3;
+    header_height = u * 17 / 4;
     h = header_height + u * 23 / 2;
     /* Cinzel from fonts/, for this program only; Tahoma when it is missing. */
-    const wchar_t *heading = AddFontResourceExW(in_kit(L"\\fonts\\Cinzel-Bold.ttf"), FR_PRIVATE, 0) ? L"Cinzel" : L"Tahoma";
-    title_font = CreateFontW(-u * 3 / 2, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
-                             ANTIALIASED_QUALITY, 0, heading);
+    if (AddFontResourceExW(in_kit(L"\\fonts\\Cinzel-Bold.ttf"), FR_PRIVATE, 0)) heading_face = L"Cinzel";
+    unit = u;
     button_font = CreateFontW(-u * 2 / 3, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
-                              ANTIALIASED_QUALITY, 0, heading);
+                              ANTIALIASED_QUALITY, 0, heading_face);
     small_font = CreateFontW(-u / 2, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                              CLEARTYPE_QUALITY, 0, L"Tahoma");
     background_brush = CreateSolidBrush(TF_BACKGROUND);
     font = CreateFontW(-u * 2 / 3, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
                        CLEARTYPE_QUALITY, 0, L"Tahoma");
     big_font = CreateFontW(-u, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0,
-                           ANTIALIASED_QUALITY, 0, heading);
+                           ANTIALIASED_QUALITY, 0, heading_face);
     wc.lpfnWndProc = window_proc;
     wc.hInstance = instance;
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
@@ -793,7 +866,8 @@ static int show_menu(HINSTANCE instance)
     DeleteObject(font);
     DeleteObject(big_font);
     DeleteObject(small_font);
-    DeleteObject(title_font);
+    if (header_cache) DeleteObject(header_cache);
+    header_cache = NULL;
     DeleteObject(button_font);
     DeleteObject(background_brush);
     return (int)msg.wParam;
