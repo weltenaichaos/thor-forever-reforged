@@ -140,16 +140,19 @@ static HFONT font, big_font, small_font, title_font;
 static HBRUSH background_brush;
 static int header_height;
 
-/* Colours of the start screen: dark stone and gold, after the game's own
- * menus (colours only; no game artwork or fonts are used). */
-#define TF_BACKGROUND RGB(18, 14, 10)
-#define TF_HEADER_TOP RGB(52, 34, 18)
-#define TF_GOLD RGB(255, 209, 0)
-#define TF_GOLD_DARK RGB(184, 134, 43)
-#define TF_BRONZE RGB(110, 81, 40)
-#define TF_TEXT RGB(232, 220, 192)
-#define TF_MUTED RGB(168, 149, 112)
-#define TF_WARNING RGB(255, 179, 71)
+/* Colours of the start screen, after World of Warcraft: Forever: deep sky
+ * blue, light sky, cream headings and the teal of its logo (colours only;
+ * no game artwork or fonts are used). */
+#define TF_BACKGROUND RGB(16, 38, 59)
+#define TF_HEADER_TOP RGB(65, 110, 151)
+#define TF_CREAM RGB(243, 238, 226)
+#define TF_SKY RGB(169, 207, 231)
+#define TF_SKY_DARK RGB(131, 176, 206)
+#define TF_EDGE RGB(65, 110, 151)
+#define TF_TEXT RGB(211, 230, 243)
+#define TF_TEAL RGB(52, 186, 215)
+#define TF_TEAL_DARK RGB(32, 129, 165)
+#define TF_WARNING RGB(224, 163, 53)
 static int bnet_started, menu_width, menu_height, notice_height;
 static wchar_t notice_buffer[1024];
 static void refresh_copies(void);
@@ -459,12 +462,12 @@ static void frame(HDC dc, RECT r, COLORREF color)
     DeleteObject(brush);
 }
 
-/* A small gold diamond, centred on x, y. */
+/* A small light-blue diamond, centred on x, y. */
 static void diamond(HDC dc, int x, int y, int size)
 {
     POINT points[4] = { { x, y - size }, { x + size, y }, { x, y + size }, { x - size, y } };
-    HBRUSH brush = CreateSolidBrush(TF_GOLD_DARK), old_brush = SelectObject(dc, brush);
-    HPEN pen = CreatePen(PS_SOLID, 1, TF_GOLD), old_pen = SelectObject(dc, pen);
+    HBRUSH brush = CreateSolidBrush(TF_SKY_DARK), old_brush = SelectObject(dc, brush);
+    HPEN pen = CreatePen(PS_SOLID, 1, TF_SKY), old_pen = SelectObject(dc, pen);
     Polygon(dc, points, 4);
     SelectObject(dc, old_brush);
     SelectObject(dc, old_pen);
@@ -472,7 +475,19 @@ static void diamond(HDC dc, int x, int y, int size)
     DeleteObject(pen);
 }
 
-/* Background, gold frame and the title header. */
+/* The infinity sign of the Forever logo, centred on x, y, in teal. */
+static void infinity(HDC dc, int x, int y, int size)
+{
+    HPEN pen = CreatePen(PS_SOLID, size / 4 > 1 ? size / 4 : 2, TF_TEAL), old_pen = SelectObject(dc, pen);
+    HBRUSH old_brush = SelectObject(dc, CreateSolidBrush(TF_BACKGROUND));
+    Ellipse(dc, x - 2 * size, y - size * 3 / 4, x + size / 8, y + size * 3 / 4);
+    Ellipse(dc, x - size / 8, y - size * 3 / 4, x + 2 * size, y + size * 3 / 4);
+    DeleteObject(SelectObject(dc, old_brush));
+    SelectObject(dc, old_pen);
+    DeleteObject(pen);
+}
+
+/* Background, light frame and the title header. */
 static void paint_menu(HWND window)
 {
     PAINTSTRUCT ps;
@@ -486,40 +501,43 @@ static void paint_menu(HWND window)
     header = client;
     header.bottom = header_height;
     fill_gradient(dc, &header, TF_HEADER_TOP, TF_BACKGROUND);
-    frame(dc, client, TF_GOLD_DARK);
+    frame(dc, client, TF_SKY_DARK);
     InflateRect(&client, -3, -3);
-    frame(dc, client, TF_BRONZE);
+    frame(dc, client, TF_EDGE);
     SetBkMode(dc, TRANSPARENT);
     SelectObject(dc, title_font);
-    SetTextColor(dc, TF_GOLD);
+    SetTextColor(dc, TF_CREAM);
     SetTextCharacterExtra(dc, gap / 2);
     text = header;
     text.top = gap;
     text.bottom = header_height * 5 / 8;
     DrawTextW(dc, L"WORLD OF WARCRAFT", -1, &text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     SelectObject(dc, small_font);
-    SetTextColor(dc, TF_MUTED);
+    SetTextColor(dc, TF_SKY);
     SetTextCharacterExtra(dc, gap / 4);
     text.top = text.bottom;
     text.bottom = header_height - gap;
     DrawTextW(dc, L"FOREVER  \x00b7  ON THE AYN THOR", -1, &text, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     SetTextCharacterExtra(dc, 0);
-    /* Divider: gold line with a diamond in the middle. */
+    /* Divider: light line with the infinity sign in the middle. */
     {
-        RECT line = { w / 6, header_height, w * 5 / 6, header_height + 1 };
-        HBRUSH brush = CreateSolidBrush(TF_GOLD_DARK);
+        RECT line = { w / 6, header_height, w / 2 - 3 * gap, header_height + 1 };
+        HBRUSH brush = CreateSolidBrush(TF_SKY_DARK);
+        FillRect(dc, &line, brush);
+        line.left = w / 2 + 3 * gap;
+        line.right = w * 5 / 6;
         FillRect(dc, &line, brush);
         DeleteObject(brush);
-        diamond(dc, w / 2, header_height, gap);
+        infinity(dc, w / 2, header_height, gap * 3 / 2);
         diamond(dc, w / 6, header_height, gap / 2);
         diamond(dc, w * 5 / 6, header_height, gap / 2);
     }
     EndPaint(window, &ps);
 }
 
-/* Buttons: Play in the game's red with a gold edge, the others in dark
- * bronze. The three setting buttons show their name small and the value
- * in gold. */
+/* Buttons: Play in the teal of the Forever logo, the others in deep blue.
+ * The three setting buttons show their name small and the value in light
+ * sky blue. */
 static void draw_button(const DRAWITEMSTRUCT *d)
 {
     HDC dc = d->hDC;
@@ -531,19 +549,19 @@ static void draw_button(const DRAWITEMSTRUCT *d)
     COLORREF top, bottom, edge, ink;
     for (i = 0; i < SETTING_COUNT; ++i) if (d->hwndItem == settings[i].button) setting = 1;
     if (disabled) {
-        top = RGB(46, 40, 34); bottom = RGB(34, 29, 24); edge = RGB(80, 70, 58); ink = RGB(130, 120, 104);
+        top = RGB(44, 58, 72); bottom = RGB(34, 46, 58); edge = RGB(70, 88, 106); ink = RGB(128, 146, 162);
     } else if (play) {
-        top = RGB(170, 40, 26); bottom = RGB(96, 16, 9); edge = TF_GOLD_DARK; ink = RGB(255, 226, 140);
+        top = TF_TEAL; bottom = TF_TEAL_DARK; edge = TF_SKY; ink = RGB(255, 255, 255);
     } else {
-        top = RGB(58, 43, 29); bottom = RGB(30, 22, 15); edge = TF_BRONZE; ink = TF_TEXT;
+        top = RGB(37, 70, 102); bottom = RGB(22, 48, 73); edge = TF_EDGE; ink = TF_TEXT;
     }
     if (pressed) { COLORREF swap = top; top = bottom; bottom = swap; }
-    if (focus && !disabled) edge = TF_GOLD;
+    if (focus && !disabled) edge = TF_CREAM;
     fill_gradient(dc, &r, top, bottom);
     frame(dc, r, edge);
     inner = r;
     InflateRect(&inner, -1, -1);
-    frame(dc, inner, RGB(12, 9, 6));
+    frame(dc, inner, RGB(9, 24, 38));
     if (pressed) OffsetRect(&r, 1, 1);
     GetWindowTextW(d->hwndItem, text, 160);
     SetBkMode(dc, TRANSPARENT);
@@ -555,10 +573,10 @@ static void draw_button(const DRAWITEMSTRUCT *d)
         value.top = label.bottom;
         value.bottom = r.bottom - (r.bottom - r.top) / 10;
         SelectObject(dc, small_font);
-        SetTextColor(dc, disabled ? ink : TF_MUTED);
+        SetTextColor(dc, disabled ? ink : TF_SKY_DARK);
         DrawTextW(dc, text, -1, &label, DT_CENTER | DT_BOTTOM | DT_SINGLELINE | DT_NOPREFIX);
         SelectObject(dc, font);
-        SetTextColor(dc, disabled ? ink : TF_GOLD);
+        SetTextColor(dc, disabled ? ink : TF_CREAM);
         DrawTextW(dc, colon[1] == L' ' ? colon + 2 : colon + 1, -1, &value,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     } else {
@@ -641,7 +659,7 @@ static LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LP
     case WM_CTLCOLORSTATIC: {
         HDC dc = (HDC)wparam;
         HWND control = (HWND)lparam;
-        SetTextColor(dc, control == notice_text ? TF_WARNING : control == version_text ? TF_GOLD : TF_TEXT);
+        SetTextColor(dc, control == notice_text ? TF_WARNING : control == version_text ? TF_SKY : TF_TEXT);
         SetBkColor(dc, TF_BACKGROUND);
         return (LRESULT)background_brush;
     }
