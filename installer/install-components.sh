@@ -28,7 +28,11 @@ esac
 . "$TF_DIR/stage-game.sh" || exit 5
 . "$TF_DIR/install-report.sh" || exit 5
 [ -s "$TF_DIR/Config-Thor-Forever.wtf" ] && [ ! -L "$TF_DIR/Config-Thor-Forever.wtf" ] || exit 5
-if ! tf_discover_game "$TF_USR"; then
+# With the game in several containers, use the one this runs in (the
+# container's folder is GameHub's WINEPREFIX), as launch-game.sh does.
+tf_container=
+case "${WINEPREFIX-}" in "$TF_USR/home/virtual_containers/"*) tf_container=${WINEPREFIX%/} ;; esac
+if ! tf_discover_game "$TF_USR" "$tf_container"; then
     if [ "$TF_DISCOVERY_STATUS" = multiple ]; then
         print -r -- 'The game is installed in more than one GameHub container. Keep one and delete the other (or its World of Warcraft folder):'
         print -rn -- "$TF_GAME_LIST"
@@ -37,15 +41,22 @@ if ! tf_discover_game "$TF_USR"; then
     fi
     exit 6
 fi
+# The start screen shows the current phase: with TF_PROGRESS_FILE set, each
+# phase name is written there (installer/start-install.sh sets it).
+tf_phase()
+{
+    TF_PHASE=$1
+    [ -z "${TF_PROGRESS_FILE-}" ] || print -r -- "$1" >"$TF_PROGRESS_FILE"
+}
 # Checksum scratch lives in a new directory, so previous reports are preserved.
 mkdir -p "$TF_PARENT" || exit 7
 mkdir "$TF_INSTALL" || exit 8
 exec >"$TF_INSTALL/install.log" 2>&1 </dev/null
-TF_PHASE=payload
+tf_phase payload
 trap 'tf_exit=$?; tf_install_report "$tf_exit"; exit "$tf_exit"' EXIT
 print -r -- 'Thor Forever component installation. Existing GameHub components are not replaced.'
 tf_verify_payload "$TF_DIR/../payload" "$TF_INSTALL/checksum.tmp" || exit 9
-TF_PHASE=storage
+tf_phase storage
 # Parse df with shell builtins: require 3 GiB available for extraction + prefix.
 /system/bin/toybox df -Pk "$TF_PARENT" >"$TF_INSTALL/space.txt" || exit 10
 tf_space_ok=0
@@ -55,12 +66,12 @@ while read -r tf_fs tf_blocks tf_used tf_available tf_percent tf_mount; do
 done <"$TF_INSTALL/space.txt"
 [ "$tf_space_ok" = 1 ] || { print -r -- 'At least 3 GiB of free internal storage is required.'; exit 11; }
 mkdir "$TF_INSTALL/runtime" "$TF_INSTALL/graphics" "$TF_INSTALL/driver" || exit 12
-TF_PHASE=extraction
+tf_phase extraction
 # Only the archive pinned above is accepted. Its member paths are audited by
 # tools/audit-runtime-archive.py before updating a payload hash for a release.
 /system/bin/toybox tar -xf "$TF_DIR/../payload/wine-runtime.tar" -C "$TF_INSTALL/runtime" || exit 13
 [ ! -e "$TF_INSTALL/runtime/lib/libandroid-sysvshm.so" ] && [ ! -L "$TF_INSTALL/runtime/lib/libandroid-sysvshm.so" ] || exit 14
-TF_PHASE=components
+tf_phase components
 cp "$TF_DIR/../payload/libandroid-sysvshm.so" "$TF_INSTALL/runtime/lib/libandroid-sysvshm.so" || exit 15
 cp "$TF_DIR/../payload/libGL.so.1" "$TF_INSTALL/graphics/libGL.so.1" || exit 15
 cp "$TF_DIR/../payload/trace.so" "$TF_INSTALL/graphics/trace.so" || exit 15
@@ -69,9 +80,9 @@ cmp -s "$TF_DIR/../payload/libandroid-sysvshm.so" "$TF_INSTALL/runtime/lib/liban
 cmp -s "$TF_DIR/../payload/libGL.so.1" "$TF_INSTALL/graphics/libGL.so.1" || exit 15
 cmp -s "$TF_DIR/../payload/trace.so" "$TF_INSTALL/graphics/trace.so" || exit 15
 cmp -s "$TF_DIR/../payload/libvulkan_freedreno.so" "$TF_INSTALL/driver/libvulkan_freedreno.so" || exit 15
-TF_PHASE=prefix
+tf_phase prefix
 tf_create_prefix "$TF_INSTALL/runtime" "$TF_INSTALL/prefix" "$TF_INSTALL/graphics" || exit 16
-TF_PHASE=dxvk
+tf_phase dxvk
 for tf_dll in dxgi.dll d3d11.dll; do
     tf_dest="$TF_INSTALL/prefix/drive_c/windows/system32/$tf_dll"
     [ ! -L "$tf_dest" ] || exit 17
@@ -83,8 +94,8 @@ for tf_dll in dxgi.dll d3d11.dll; do
     cmp -s "$TF_DIR/../payload/$tf_dll" "$tf_dest" || exit 19
 done
 print -r -- 'COMPONENTS_READY' >"$TF_INSTALL/components-ready" || exit 20
-TF_PHASE=game
+tf_phase game
 tf_stage_game "$TF_GAME_DIR" "$TF_INSTALL" "$TF_DIR/Config-Thor-Forever.wtf" || exit 21
-TF_PHASE=prepared
+tf_phase prepared
 print -r -- 'Components and separate game layout prepared. Launcher and acceptance tests are still required.'
 exit 0

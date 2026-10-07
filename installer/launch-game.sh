@@ -166,6 +166,7 @@ case "${TF_ENTRY_TOKEN-}" in
     *)
         for tf_entry in "$LOGS"/ENTRY-*.log "$LOGS"/ENTRY-*.started "$LOGS"/ENTRY-*.done \
             "$LOGS"/ENTRY-*.copies "$LOGS"/ENTRY-*.sizes "$LOGS"/ENTRY-*.removed "$LOGS"/ENTRY-*.rc \
+            "$LOGS"/ENTRY-*.state "$LOGS"/ENTRY-*.installed \
             "$KIT"/ENTRY-*.log "$KIT"/ENTRY-*.started "$KIT"/ENTRY-*.done; do
             [ -f "$tf_entry" ] && [ ! -L "$tf_entry" ] || continue
             [ "$tf_entry" = "$LOGS/${tf_entry##*/}" ] &&
