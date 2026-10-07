@@ -45,6 +45,11 @@ is not read-only. Never point Battle.net or an updater at this separate layout.
    - **FPS cap**, **Overlay** and **Measuring** change those settings in
      `tuning.conf`. Each tap moves to the next value.
    - **Quit** closes the start screen without playing.
+   - If the game is installed in more than one GameHub container (this can
+     happen after reinstalling the game or the container), a note at the
+     bottom says so. You always play from the copy in the container you
+     started from. **Remove other copy** deletes the other container's World
+     of Warcraft folder to free its storage, after asking you first.
 2. Log in yourself, choose your controls and play briefly.
 3. Exit through **WoW's menu > Exit Game**, then reopen the launcher and check
    that your controls/settings remain selected.
