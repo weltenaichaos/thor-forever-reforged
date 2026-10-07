@@ -569,6 +569,13 @@ case "$tf_affinity" in
     one|one-then-all|one-then-split) set -- /system/bin/toybox taskset 80 ;;
     *) set -- ;;
 esac
+# The cores can be switched off (a power-saving mode, heat): then taskset
+# refuses the mask ("Invalid argument") and WoW would not start at all.
+if [ "$#" -gt 0 ] && ! "$@" /system/bin/toybox true >/dev/null 2>&1 </dev/null; then
+    print -r -- "AFFINITY: the cores for $tf_affinity are not available now; starting WoW on all cores."
+    set --
+    tf_affinity=all
+fi
 # WoW writes its own crash reports into Errors inside the private game
 # folder, where they can't be opened on the device. A crash usually ends
 # this script too, so copy new reports to Download/Thor-Forever/wow-errors
