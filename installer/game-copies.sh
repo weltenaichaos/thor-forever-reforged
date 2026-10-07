@@ -108,6 +108,9 @@ tf_remove_copy() (
         if [ -e "$tf_wow" ]; then
             print -r -- "Could not delete everything in $tf_wow. Left over:"
             /system/bin/toybox ls -la "$tf_wow" "$tf_wow/_classic_beta_"
+            print -r -- 'Running as, and the folders on the way:'
+            /system/bin/toybox id
+            /system/bin/toybox ls -ld "$tf_box" "$tf_box/drive_c" "$tf_box/drive_c/$tf_programs" "$tf_wow"
             exit 8
         fi
         tf_found=1

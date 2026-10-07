@@ -51,10 +51,32 @@ if [ "${2-}" = wait ]; then
             rm -f "$tf_at.remove"
             [ -z "$tf_sizer" ] || kill "$tf_sizer" 2>/dev/null
             tf_sizer=
-            tf_remove_copy "$tf_usr" "$tf_here" "$tf_name" "$tf_usr/home/thor-forever/release-v1/game/_classic_beta_"
+            tf_remove_copy "$tf_usr" "$tf_here" "$tf_name" "$tf_usr/home/thor-forever/release-v1/game/_classic_beta_" \
+                >"$tf_at.why" 2>&1
             tf_result=$?
             tf_scan_copies "$tf_usr" "$tf_here" "$tf_at.copies"
-            print -r -- "$tf_result" >"$tf_at.removed.tmp" && mv -f "$tf_at.removed.tmp" "$tf_at.removed"
+            # .removed: the result code, then (on failure) the first and last
+            # lines of what happened, which the start screen shows.
+            tf_lines=0
+            while IFS= read -r tf_line; do
+                print -r -- "$tf_line"
+                tf_lines=$((tf_lines + 1))
+            done <"$tf_at.why"
+            {
+                print -r -- "$tf_result"
+                if [ "$tf_result" != 0 ]; then
+                    tf_n=0
+                    while IFS= read -r tf_line; do
+                        tf_n=$((tf_n + 1))
+                        if [ "$tf_n" -le 8 ] || [ "$tf_n" -gt $((tf_lines - 16)) ]; then
+                            print -r -- "$tf_line"
+                        elif [ "$tf_n" = 9 ]; then
+                            print -r -- '...'
+                        fi
+                    done <"$tf_at.why"
+                fi
+            } >"$tf_at.removed.tmp" && mv -f "$tf_at.removed.tmp" "$tf_at.removed"
+            rm -f "$tf_at.why"
         fi
         /system/bin/toybox sleep 0.5 >/dev/null 2>&1 </dev/null
     done

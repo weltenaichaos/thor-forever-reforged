@@ -625,17 +625,31 @@ static void refresh_copies(void)
     int others = 0, elsewhere = 0, leftover = 0, i;
     if (!bridge_waiting) return;
     if (removing) {
+        static char result[4096];
+        static wchar_t details[4096];
+        char *rest;
         entry_path(path, bridge_token, L"removed");
-        if (!read_text(path, sizes, 32)) return;
+        if (!read_text(path, result, sizeof(result))) return;
         DeleteFileW(path);
         removing = 0;
         EnableWindow(play_button, TRUE);
         EnableWindow(remove_button, TRUE);
-        if (atoi(sizes) == 0 && sizes[0] == '0')
+        if (atoi(result) == 0 && result[0] == '0') {
             swprintf(notice_message, 512, L"The other game copy was removed.");
-        else
-            swprintf(notice_message, 512, L"Could not remove the other game copy (code %d). "
-                     L"Details are in logs\\ENTRY-%ls.log.", atoi(sizes), bridge_token);
+        } else {
+            swprintf(notice_message, 512, L"Could not remove the other game copy (code %d).", atoi(result));
+            /* The bridge adds what happened after the code; show it here,
+             * as the log may not be visible in every file manager. */
+            rest = strchr(result, '\n');
+            if (!rest || !MultiByteToWideChar(CP_UTF8, 0, rest + 1, -1, details, 3000)) details[0] = 0;
+            details[3000] = 0;
+            swprintf(text, 1024, L"%ls Details:\n\n", notice_message);
+            {
+                static wchar_t box[4200];
+                swprintf(box, 4200, L"%ls%ls", text, details);
+                MessageBoxW(menu_window, box, L"Thor Forever", MB_OK | MB_ICONWARNING);
+            }
+        }
     }
     entry_path(path, bridge_token, L"copies");
     if (!read_text(path, copies, sizeof(copies))) copies[0] = 0;
