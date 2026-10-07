@@ -16,7 +16,7 @@ DRIVER="$ROOT/driver"
 PREFIX="$ROOT/prefix"
 STAGE="$ROOT/game"
 GAME="$STAGE/_classic_beta_"
-# Each launch logs into its own Download/Thor-Forever/logs/run-<n> folder,
+# Each launch logs into its own Thor-Forever/logs/run-<n> folder,
 # numbered one above the newest existing one. Only the newest TF_KEEP_RUNS
 # folders are kept; older ones are deleted once this launch holds the lock.
 LOGS="$KIT/logs"
@@ -87,7 +87,7 @@ if [ -f "$KIT/installer/stage-game.sh" ] && . "$KIT/installer/stage-game.sh"; th
         72) print -r -- 'ADDONS: the staged game has its own Interface folder with files in it; left unchanged. Move its addons to the original Interface\AddOns and delete it.' ;;
         *) print -r -- "ADDONS: Interface folder not linked (code $tf_link); starting without it." ;;
     esac
-    # Addons dropped into Download/Thor-Forever/AddOns are installed now, so no
+    # Addons dropped into Thor-Forever/AddOns are installed now, so no
     # file browser inside GameHub is needed. They go where the game loads them
     # from: through the link (the original folder), or into the staged game's
     # own Interface folder when it has one.
@@ -96,7 +96,7 @@ if [ -f "$KIT/installer/stage-game.sh" ] && . "$KIT/installer/stage-game.sh"; th
         *) tf_addons="$SOURCE/Interface/AddOns" ;;
     esac
     tf_sync_addons "$KIT/AddOns" "$tf_addons" ||
-        print -r -- "ADDONS: could not copy from Download/Thor-Forever/AddOns (code $?)."
+        print -r -- "ADDONS: could not copy from $KIT/AddOns (code $?)."
 fi
 # While DXVK=test DLLs are in the prefix, $ROOT/dxvk-test-active exists and
 # the installed DLLs are restored from payload/ further below.
@@ -250,7 +250,7 @@ if [ -f "$KIT/enable-trace" ]; then
 fi
 export WINEDATADIR="$RUNTIME/share/wine" XDG_DATA_DIRS="$RUNTIME/share" WINEDLLPATH="$RUNTIME/lib/wine"
 export WINEDLLOVERRIDES='dxgi,d3d11=n,b'
-# DRIVER=test uses Download/Thor-Forever/driver-test/libvulkan_freedreno.so.
+# DRIVER=test uses Thor-Forever/driver-test/libvulkan_freedreno.so.
 # Shared storage cannot hold executable code, so it is copied into the
 # app-private install first; the installed driver is never touched.
 if [ "$tf_driver" = test ]; then
@@ -280,7 +280,7 @@ tf_sha256()
 }
 tf_sha256 "$DRIVER/libvulkan_freedreno.so"
 print -r -- "DRIVER_SHA256=$tf_hash"
-# DXVK=test puts Download/Thor-Forever/dxvk-test/{dxgi,d3d11}.dll into the
+# DXVK=test puts Thor-Forever/dxvk-test/{dxgi,d3d11}.dll into the
 # test prefix. DXVK=installed puts the installed ones from payload/ back.
 # The marker is written before the first copy, so an interrupted swap is
 # still undone by the next DXVK=installed launch.
@@ -306,7 +306,7 @@ done
 if [ "$tf_dxvk" = installed ] && [ -e "$ROOT/dxvk-test-active" ]; then
     rm "$ROOT/dxvk-test-active" || fail 'Cannot clear the test DXVK marker.'
 fi
-# WINE=test swaps in Download/Thor-Forever/wine-test/ntdll.so and, when
+# WINE=test swaps in Thor-Forever/wine-test/ntdll.so and, when
 # present, ntdll.dll (from the "Build Wine" workflow: the same Wine source
 # plus this repo's esync fix). The two halves of ntdll must come from the
 # same build. Each installed file is kept as <file>.installed and put back
@@ -355,7 +355,7 @@ print -r -- "WINE_NTDLL_SHA256=$tf_hash"
 tf_sha256 "$tf_ntdll_pe"
 print -r -- "WINE_NTDLL_DLL_SHA256=$tf_hash"
 # With LOGS=trace, keep one copy of the installed (original) ntdll pair in
-# Download/Thor-Forever/wine-installed/, to compare it with a rebuilt one.
+# Thor-Forever/wine-installed/, to compare it with a rebuilt one.
 if [ "$tf_logs" = trace ] && [ ! -e "$KIT/wine-installed/ntdll.dll" ]; then
     mkdir -p "$KIT/wine-installed" &&
         for tf_file in "$tf_ntdll" "$tf_ntdll_pe"; do
@@ -571,7 +571,7 @@ case "$tf_affinity" in
 esac
 # WoW writes its own crash reports into Errors inside the private game
 # folder, where they can't be opened on the device. A crash usually ends
-# this script too, so copy new reports to Download/Thor-Forever/wow-errors
+# this script too, so copy new reports to Thor-Forever/wow-errors
 # at the next launch. Reports copied before are skipped.
 for tf_err in "$GAME/Errors"/*.txt "$GAME/Errors"/*.log; do
     [ -f "$tf_err" ] && [ ! -L "$tf_err" ] || continue

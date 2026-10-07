@@ -38,15 +38,15 @@ handle's cache entry visible before its file descriptor was stored, and
 closed descriptors while other threads still used them.
 `patches/wine-esync-deferred-close.patch` fixes both; the "Build Wine"
 workflow builds it as `wine-ntdll-esync-fix`. Put its `ntdll.so` and
-`ntdll.dll` in `Download/Thor-Forever/wine-test/`. With it, 3 of 3 quits
+`ntdll.dll` in `Thor-Forever/wine-test/`. With it, 3 of 3 quits
 returned to GameHub.
 
 Put the files in place first:
 
-- `Download/Thor-Forever/driver-test/libvulkan_freedreno.so` from the
+- `Thor-Forever/driver-test/libvulkan_freedreno.so` from the
   `turnip-mesa-26.2.3-cache` artifact of the "Build Turnip" workflow
   (tested build: sha256 `775295d2...`).
-- `Download/Thor-Forever/dxvk-test/dxgi.dll` and `d3d11.dll` from the
+- `Thor-Forever/dxvk-test/dxgi.dll` and `d3d11.dll` from the
   `dxvk-2.6.2-thor-arm64` artifact of the "Build DXVK" workflow (tested
   builds: d3d11.dll sha256 `9cc173ce...`, and `a5036f0f...` with the
   frame log for `PROFILE=on`). It is DXVK 2.6.2 compiled for the
@@ -76,7 +76,7 @@ the launcher only uses esync with `DRIVER=test`. Later the same crash,
 after about 6 minutes with missing minimap and menu textures, turned out to
 be an fd leak in Wine's esync. It is fixed in the `wine-ntdll-esync-fix`
 build (see [PERFORMANCE.md](PERFORMANCE.md)). WoW's crash reports are
-copied to `Download/Thor-Forever/wow-errors` at the next launch.
+copied to `Thor-Forever/wow-errors` at the next launch.
 
 - Android 14 or newer: Developer options, "Disable child process restrictions".
 - Android 12 or 13, with adb:

@@ -46,7 +46,7 @@ DXVK 2.7.1 (does not start), and lower render scale.
 ## Recommended setup
 
 Use `tuning.conf` as shipped (see [TUNING.md](TUNING.md)), with
-`PROFILE=off` for normal play. Put these files in `Download/Thor-Forever/`:
+`PROFILE=off` for normal play. Put these files in `Thor-Forever/`:
 
 | Folder | Files | From | Last tested sha256 |
 | --- | --- | --- | --- |
@@ -65,7 +65,7 @@ the Android settings in [TUNING.md](TUNING.md).
 ## How to measure
 
 Set `PROFILE=on` in `tuning.conf`, play, quit normally, then collect from
-`Download/Thor-Forever/logs/run-<n>/` (the highest number is the newest run; only the last 3 runs are kept):
+`Thor-Forever/logs/run-<n>/` (the highest number is the newest run; only the last 3 runs are kept):
 
 | File | What it holds | Summarize with |
 | --- | --- | --- |

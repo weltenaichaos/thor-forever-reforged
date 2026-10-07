@@ -21,13 +21,19 @@ container to the first game start.
 
 ## Install once
 
-1. Extract the complete package so that `Thor-Forever.exe` and the `payload`
-   and `installer` folders are directly inside **Download/Thor-Forever**. Do
-   not leave them inside a second nested folder.
-   Download/Thor-Forever is only the suggested place: any folder in the
-   device's shared storage works (for example **Games/Thor-Forever**), as long
-   as its path has no spaces and only letters, digits, `-`, `_` and `.`. The
-   start screen uses the folder it is in. To move it later, close Thor
+1. Extract the complete package into a **Thor-Forever** folder, so that
+   `Thor-Forever.exe` and the `payload` and `installer` folders are directly
+   inside it. Do not leave them inside a second nested folder.
+   **Download/Thor-Forever** is the suggested place, but the folder can be
+   anywhere as long as:
+   - it is in the device's internal shared storage (for example
+     **Download/Thor-Forever**, **Games/Thor-Forever** or the top of the
+     internal storage), not inside `Android/data` or `Android/obb`. A memory
+     card is untested.
+   - its whole path has only letters, digits, `-`, `_` and `.` (no spaces).
+   - the whole folder stays together.
+
+   The start screen uses the folder it is in. To move it later, close Thor
    Forever and **copy** (not move) the whole folder to the new place. Select
    the copied Thor-Forever.exe as the Startup File Path, check that it
    starts, and only then delete the old folder by hand. GameHub Lite hides
@@ -35,8 +41,9 @@ container to the first game start.
    so moving first leaves no way to change the path (moving the folder back
    brings the settings back). Nothing needs to be installed again.
 2. In GameHub, open the container where you installed the game: **Game
-   Settings > General > Startup File Path**, select
-   **Download/Thor-Forever/Thor-Forever.exe**, and press **Play**.
+   Settings > General > Startup File Path**, select **Thor-Forever.exe** in
+   your Thor-Forever folder (for example
+   **Download/Thor-Forever/Thor-Forever.exe**), and press **Play**.
 3. The start screen says Thor Forever is not installed yet and lists anything
    that is missing (the game in this container, or install files). When
    everything is there, press **Install**. It shows each step while it runs;
@@ -49,7 +56,7 @@ button says **Repair**. Repair renames the old installation to
 game settings (the WTF folder) over.
 
 To redo a working installation (for example to test Install), create a file
-named `repair` or `repair.txt` in Download/Thor-Forever; the start screen then
+named `repair` or `repair.txt` in your Thor-Forever folder; the start screen then
 offers Repair, and removes the file once Repair succeeds.
 
 `Install-Thor-Forever.cmd` (run from the container desktop, result in
@@ -88,7 +95,7 @@ Each launch writes its logs into **Thor-Forever > logs > run-<number>**
 ## Open directly from GameHub
 
 With WoW closed, go to the same container's **Game Settings > General > Startup
-File Path**. Select **Download/Thor-Forever/Thor-Forever.exe**. Return to GameHub
+File Path**. Select **Thor-Forever.exe** in your Thor-Forever folder. Return to GameHub
 and press **Play**. Do not choose Battle.net or the bare game executable.
 
 Keep the Thor-Forever folder in place: its scripts are required for direct entry.

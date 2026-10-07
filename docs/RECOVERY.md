@@ -28,5 +28,5 @@ Saved preferences and account-related settings in the new prefix/game directory
 must be preserved if you want to keep using that installation.
 
 The selected launcher's scripts remain dependencies even after direct GameHub
-launch works. Keep `Download/Thor-Forever` in place. Older test folders may still
+launch works. Keep your Thor-Forever folder in place. Older test folders may still
 be needed by older startup entries; this release does not remove any of them.
