@@ -50,7 +50,7 @@ static int same_folder(const wchar_t *candidate, const wchar_t *check_name)
 
 static int find_kit(void)
 {
-    wchar_t candidates[4][MAX_PATH], check[MAX_PATH + 64], check_name[64], *slash, *c;
+    wchar_t candidates[8][MAX_PATH], check[MAX_PATH + 64], check_name[64], *slash, *c;
     unix_name_function unix_name;
     HANDLE file;
     int i, count = 0, found = 0;
@@ -69,10 +69,19 @@ static int find_kit(void)
         }
     }
     if (wine_name[0]) wcscpy(candidates[count++], wine_name);
-    /* 2. Started through Z:, the path after Z:. */
-    if ((KIT[0] == L'Z' || KIT[0] == L'z') && KIT[1] == L':' && KIT[2] == L'\\') {
-        wcscpy(candidates[count], KIT + 2);
-        for (c = candidates[count++]; *c; ++c) if (*c == L'\\') *c = L'/';
+    /* 2. The path after the drive letter, under the places GameHub maps
+     *    drives to: Z: is the Unix root, and other letters (D:, E:, ...)
+     *    stand for shared storage or its Download folder. */
+    if (KIT[0] && KIT[1] == L':' && KIT[2] == L'\\') {
+        static const wchar_t *const roots[] = {
+            L"", L"/sdcard", L"/storage/emulated/0", L"/sdcard/Download", L"/storage/emulated/0/Download"
+        };
+        size_t r;
+        for (r = (KIT[0] == L'Z' || KIT[0] == L'z') ? 0 : 1; r < sizeof(roots) / sizeof(roots[0]); ++r) {
+            if (wcslen(roots[r]) + wcslen(KIT + 2) >= MAX_PATH) continue;
+            swprintf(candidates[count], MAX_PATH, L"%ls%ls", roots[r], KIT + 2);
+            for (c = candidates[count++]; *c; ++c) if (*c == L'\\') *c = L'/';
+        }
     }
     /* 3. The usual places, which earlier versions always used. */
     wcscpy(candidates[count++], L"/sdcard/Download/Thor-Forever");
