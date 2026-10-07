@@ -24,6 +24,16 @@ container to the first game start.
 1. Extract the complete package so that `Thor-Forever.exe` and the `payload`
    and `installer` folders are directly inside **Download/Thor-Forever**. Do
    not leave them inside a second nested folder.
+   Download/Thor-Forever is only the suggested place: any folder in the
+   device's shared storage works (for example **Games/Thor-Forever**), as long
+   as its path has no spaces and only letters, digits, `-`, `_` and `.`. The
+   start screen uses the folder it is in. To move it later, close Thor
+   Forever and **copy** (not move) the whole folder to the new place. Select
+   the copied Thor-Forever.exe as the Startup File Path, check that it
+   starts, and only then delete the old folder by hand. GameHub Lite hides
+   a game's settings while its Startup File Path points to a missing file,
+   so moving first leaves no way to change the path (moving the folder back
+   brings the settings back). Nothing needs to be installed again.
 2. In GameHub, open the container where you installed the game: **Game
    Settings > General > Startup File Path**, select
    **Download/Thor-Forever/Thor-Forever.exe**, and press **Play**.
