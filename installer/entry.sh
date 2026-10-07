@@ -54,12 +54,15 @@ if [ "${2-}" = wait ]; then
             # Deletes in the background. Meanwhile .progress says "<uptime>
             # <KiB freed so far>" every 2 seconds, so the start screen can
             # show progress and see that this is still alive; .stop ends it.
+            print -r -- "REMOVE requested for container $tf_name."
             tf_free0=$(tf_free_kb "$tf_usr/home" "$tf_at.df")
+            print -r -- "Free before: $tf_free0 KiB. Deleting in the background."
             (
                 tf_remove_copy "$tf_usr" "$tf_here" "$tf_name" "$tf_usr/home/thor-forever/release-v1/game/_classic_beta_"
                 print -r -- "$?" >"$tf_at.rc"
             ) >"$tf_at.why" 2>&1 &
             tf_remover=$!
+            tf_ticks=0
             while [ ! -s "$tf_at.rc" ]; do
                 if [ -e "$tf_at.stop" ]; then
                     tf_kill_tree "$tf_remover"
@@ -69,8 +72,11 @@ if [ "${2-}" = wait ]; then
                 fi
                 read -r tf_up _ </proc/uptime
                 tf_free=$(tf_free_kb "$tf_usr/home" "$tf_at.df")
-                print -r -- "${tf_up%%.*} $((tf_free - tf_free0))" >"$tf_at.progress.tmp" &&
-                    mv -f "$tf_at.progress.tmp" "$tf_at.progress"
+                # Written in place (no rename); the start screen ignores a
+                # half-written line.
+                print -r -- "${tf_up%%.*} $((tf_free - tf_free0))" >"$tf_at.progress"
+                tf_ticks=$((tf_ticks + 1))
+                [ $((tf_ticks % 15)) != 1 ] || print -r -- "Still deleting at uptime ${tf_up%%.*}: $((tf_free - tf_free0)) KiB freed."
                 /system/bin/toybox sleep 2 >/dev/null 2>&1 </dev/null
             done
             read -r tf_result <"$tf_at.rc"

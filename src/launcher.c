@@ -615,6 +615,45 @@ static void show_notice(int on, int button)
                  menu_width, menu_height + (on ? notice_height : 0), SWP_NOZORDER);
 }
 
+/* Appends the end of a bridge file (at most max characters) to box. */
+static void append_tail(wchar_t *box, size_t size, const wchar_t *suffix, size_t max)
+{
+    static char data[65536];
+    static wchar_t wide[4096];
+    wchar_t path[512];
+    size_t length;
+    entry_path(path, bridge_token, suffix);
+    if (!read_text(path, data, sizeof(data))) return;
+    length = strlen(data);
+    if (!MultiByteToWideChar(CP_UTF8, 0, data + (length > max ? length - max : 0), -1, wide, 4096)) return;
+    wide[4095] = 0;
+    swprintf(box + wcslen(box), size - wcslen(box), L"\n--- .%ls ---\n%ls", suffix, wide);
+}
+
+/* For a removal that went quiet: shows which of this launch's bridge files
+ * exist and the end of the log, as the log may not be visible on the device. */
+static void show_bridge_files(const wchar_t *title)
+{
+    static wchar_t box[8192];
+    wchar_t pattern[512];
+    WIN32_FIND_DATAW found;
+    HANDLE find;
+    swprintf(box, 8192, L"%ls Please send a screenshot of this.\n\nFiles:", title);
+    swprintf(pattern, 512, L"%ls\\logs\\ENTRY-%ls.*", KIT, bridge_token);
+    find = FindFirstFileW(pattern, &found);
+    if (find != INVALID_HANDLE_VALUE) {
+        do {
+            swprintf(box + wcslen(box), 8192 - wcslen(box), L" %ls (%lu)", found.cFileName + wcslen(bridge_token) + 7,
+                     (unsigned long)found.nFileSizeLow);
+        } while (FindNextFileW(find, &found));
+        FindClose(find);
+    }
+    append_tail(box, 8192, L"progress", 100);
+    append_tail(box, 8192, L"why", 900);
+    append_tail(box, 8192, L"log", 900);
+    MessageBoxW(menu_window, box, L"Thor Forever", MB_OK | MB_ICONWARNING);
+}
+
 static void refresh_copies(void)
 {
     static char copies[4096], sizes[4096];
@@ -641,6 +680,7 @@ static void refresh_copies(void)
             }
             if (GetTickCount64() - removal_seen < 60000) return;
             /* The bridge stopped reporting: it is not running any more. */
+            show_bridge_files(L"The removal stopped responding.");
             removing = 0;
             EnableWindow(play_button, TRUE);
             SetWindowTextW(remove_button, L"Remove other copy");
