@@ -26,39 +26,74 @@
 
 /* The Thor-Forever folder is the folder this program is in (Download/
  * Thor-Forever by default, but any folder in shared storage works). KIT is
- * its Windows path, kit_unix the same folder for the Android shell. */
-static wchar_t KIT[MAX_PATH], kit_unix[MAX_PATH];
+ * its Windows path, kit_unix the same folder for the Android shell, and
+ * wine_name what Wine itself calls it (shown when nothing fits). */
+static wchar_t KIT[MAX_PATH], kit_unix[MAX_PATH], wine_name[MAX_PATH];
 
 typedef char *(CDECL *unix_name_function)(const WCHAR *);
 
+/* A Unix path the installer scripts accept (same characters as there), and
+ * the same folder as KIT: the check file check_name, made in KIT\logs, must
+ * show up under Z:, which is the Unix root in every Wine prefix. */
+static int same_folder(const wchar_t *candidate, const wchar_t *check_name)
+{
+    wchar_t seen[MAX_PATH + 64], *c;
+    if (candidate[0] != L'/' || wcslen(candidate) >= MAX_PATH - 40) return 0;
+    for (c = (wchar_t *)candidate; *c; ++c)
+        if (!wcschr(L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-", *c)) return 0;
+    if (wcsstr(candidate, L"/../") || wcsstr(candidate, L"/./")) return 0;
+    if (!check_name) return 1;
+    swprintf(seen, MAX_PATH + 64, L"Z:%ls/logs/%ls", candidate, check_name);
+    for (c = seen; *c; ++c) if (*c == L'/') *c = L'\\';
+    return GetFileAttributesW(seen) != INVALID_FILE_ATTRIBUTES;
+}
+
 static int find_kit(void)
 {
-    wchar_t *slash, *c;
+    wchar_t candidates[4][MAX_PATH], check[MAX_PATH + 64], check_name[64], *slash, *c;
     unix_name_function unix_name;
+    HANDLE file;
+    int i, count = 0, found = 0;
     DWORD length = GetModuleFileNameW(NULL, KIT, MAX_PATH);
     if (!length || length >= MAX_PATH - 40) return 0;
     slash = wcsrchr(KIT, L'\\');
     if (!slash) return 0;
     *slash = 0;
-    /* Wine knows which Unix folder each drive letter stands for. */
+    /* 1. What Wine says the folder is. */
     unix_name = (unix_name_function)(void (*)(void))GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "wine_get_unix_file_name");
     if (unix_name) {
         char *name = unix_name(KIT);
         if (name) {
-            if (!MultiByteToWideChar(CP_UTF8, 0, name, -1, kit_unix, MAX_PATH)) kit_unix[0] = 0;
+            if (!MultiByteToWideChar(CP_UTF8, 0, name, -1, wine_name, MAX_PATH)) wine_name[0] = 0;
             HeapFree(GetProcessHeap(), 0, name);
         }
     }
-    /* Without it, Z: is the Unix root, as in every Wine prefix. */
-    if (!kit_unix[0] && (KIT[0] == L'Z' || KIT[0] == L'z') && KIT[1] == L':' && KIT[2] == L'\\') {
-        wcscpy(kit_unix, KIT + 2);
-        for (c = kit_unix; *c; ++c) if (*c == L'\\') *c = L'/';
+    if (wine_name[0]) wcscpy(candidates[count++], wine_name);
+    /* 2. Started through Z:, the path after Z:. */
+    if ((KIT[0] == L'Z' || KIT[0] == L'z') && KIT[1] == L':' && KIT[2] == L'\\') {
+        wcscpy(candidates[count], KIT + 2);
+        for (c = candidates[count++]; *c; ++c) if (*c == L'\\') *c = L'/';
     }
-    /* The installer scripts accept the same characters. */
-    if (kit_unix[0] != L'/') return 0;
-    for (c = kit_unix; *c; ++c)
-        if (!wcschr(L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-", *c)) return 0;
-    return !wcsstr(kit_unix, L"/../") && !wcsstr(kit_unix, L"/./");
+    /* 3. The usual places, which earlier versions always used. */
+    wcscpy(candidates[count++], L"/sdcard/Download/Thor-Forever");
+    wcscpy(candidates[count++], L"/storage/emulated/0/Download/Thor-Forever");
+    swprintf(check_name, 64, L"folder-check-%lu.tmp", GetCurrentProcessId());
+    swprintf(check, MAX_PATH + 64, L"%ls\\logs", KIT);
+    CreateDirectoryW(check, NULL);
+    swprintf(check, MAX_PATH + 64, L"%ls\\logs\\%ls", KIT, check_name);
+    file = CreateFileW(check, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+    for (i = 0; i < count && !found; ++i) {
+        /* Without a Z: drive or a check file, trust the first usable name. */
+        int checked = file != INVALID_HANDLE_VALUE && GetFileAttributesW(L"Z:\\") != INVALID_FILE_ATTRIBUTES;
+        if (same_folder(candidates[i], checked ? check_name : NULL)) {
+            wcscpy(kit_unix, candidates[i]);
+            found = 1;
+        }
+    }
+    /* Only the check file this program just made in its own logs folder. */
+    if (file != INVALID_HANDLE_VALUE) DeleteFileW(check);
+    return found;
 }
 
 /* KIT + rel, in one of four rotating buffers. */
@@ -933,9 +968,12 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR args, int show
 {
     (void)previous; (void)args; (void)show;
     if (!find_kit()) {
-        MessageBoxW(NULL, L"Thor Forever cannot use the folder it is in. Use a folder in your device's storage "
-                    L"(for example Download/Thor-Forever) whose path has only letters, digits, - _ and . (no spaces).",
-                    L"Thor Forever", MB_OK | MB_ICONERROR);
+        wchar_t text[3 * MAX_PATH + 400];
+        swprintf(text, 3 * MAX_PATH + 400,
+                 L"Thor Forever cannot find the Android path of the folder it is in. Use a folder in your device's "
+                 L"storage (for example Download/Thor-Forever) whose path has only letters, digits, - _ and . (no spaces).\n\n"
+                 L"Folder: %ls\nWine calls it: %ls", KIT, wine_name[0] ? wine_name : L"(no answer)");
+        MessageBoxW(NULL, text, L"Thor Forever", MB_OK | MB_ICONERROR);
         return 2;
     }
     if (GetFileAttributesW(in_kit(L"\\installer\\entry.sh")) == INVALID_FILE_ATTRIBUTES) {
