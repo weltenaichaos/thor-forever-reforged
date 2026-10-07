@@ -7,6 +7,8 @@ tf_discover_game()
     tf_root=$1
     TF_GAME_DIR=
     TF_GAME_COUNT=0
+    # Every installation found, one per line, for the error message.
+    TF_GAME_LIST=
     TF_DISCOVERY_STATUS=missing
     [ -d "$tf_root/home/virtual_containers" ] || return 10
     for tf_container in "$tf_root/home/virtual_containers/"*; do
@@ -24,6 +26,8 @@ tf_discover_game()
             [ -s "$tf_candidate/WowB-ARM64.exe" ] || continue
             TF_GAME_COUNT=$((TF_GAME_COUNT + 1))
             TF_GAME_DIR=$tf_candidate
+            TF_GAME_LIST="$TF_GAME_LIST$tf_candidate
+"
         done
     done
     case "$TF_GAME_COUNT" in

@@ -28,7 +28,15 @@ esac
 . "$TF_DIR/stage-game.sh" || exit 5
 . "$TF_DIR/install-report.sh" || exit 5
 [ -s "$TF_DIR/Config-Thor-Forever.wtf" ] && [ ! -L "$TF_DIR/Config-Thor-Forever.wtf" ] || exit 5
-tf_discover_game "$TF_USR" || { print -r -- 'A unique supported game installation is required.'; exit 6; }
+if ! tf_discover_game "$TF_USR"; then
+    if [ "$TF_DISCOVERY_STATUS" = multiple ]; then
+        print -r -- 'The game is installed in more than one GameHub container. Keep one and delete the other (or its World of Warcraft folder):'
+        print -rn -- "$TF_GAME_LIST"
+    else
+        print -r -- 'The game was not found under C:\Program Files (x86) or C:\Program Files\World of Warcraft\_classic_beta_ in any GameHub container.'
+    fi
+    exit 6
+fi
 # Checksum scratch lives in a new directory, so previous reports are preserved.
 mkdir -p "$TF_PARENT" || exit 7
 mkdir "$TF_INSTALL" || exit 8

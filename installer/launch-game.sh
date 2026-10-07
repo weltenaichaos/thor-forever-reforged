@@ -38,7 +38,15 @@ tf_stage=preflight
 trap 'tf_status=$?; print -r -- "SCRIPT_EXIT=$tf_status STAGE=$tf_stage"' EXIT
 [ -f "$KIT/installer/discover-game.sh" ] || exit 3
 . "$KIT/installer/discover-game.sh"
-tf_discover_game "$USR" || { print -r -- 'STOP: a unique standard game installation was not found.'; exit 4; }
+if ! tf_discover_game "$USR"; then
+    if [ "$TF_DISCOVERY_STATUS" = multiple ]; then
+        print -r -- 'STOP: the game is installed in more than one GameHub container. Keep one and delete the other (or its World of Warcraft folder):'
+        print -rn -- "$TF_GAME_LIST"
+    else
+        print -r -- 'STOP: the game was not found. Looked for World of Warcraft\_classic_beta_\WowB-ARM64.exe under C:\Program Files (x86) and C:\Program Files in every GameHub container. Install it there through Battle.net.'
+    fi
+    exit 4
+fi
 SOURCE=$TF_GAME_DIR
 [ -s "$ROOT/components-ready" ] && [ -s "$ROOT/game-ready" ] || exit 5
 [ -s "$PREFIX/system.reg" ] && [ ! -L "$ROOT" ] && [ ! -L "$PREFIX" ] || exit 6
