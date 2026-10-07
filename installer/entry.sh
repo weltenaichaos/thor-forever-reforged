@@ -55,6 +55,13 @@ if [ "${2-}" = wait ]; then
             # <KiB freed so far>" every 2 seconds, so the start screen can
             # show progress and see that this is still alive; .stop ends it.
             print -r -- "REMOVE requested for container $tf_name."
+            # Other bridges still waiting (from start screens that were not
+            # closed with Quit) are worth knowing about when this misbehaves.
+            for tf_proc in /proc/[0-9]*; do
+                tf_cmd=
+                read -r tf_cmd <"$tf_proc/cmdline" 2>/dev/null
+                case "$tf_cmd" in *entry.sh*) print -r -- "Bridge running: ${tf_proc##*/}" ;; esac
+            done
             tf_free0=$(tf_free_kb "$tf_usr/home" "$tf_at.df")
             print -r -- "Free before: $tf_free0 KiB. Deleting in the background."
             (

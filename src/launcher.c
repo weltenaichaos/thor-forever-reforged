@@ -639,15 +639,18 @@ static void show_bridge_files(const wchar_t *title)
     WIN32_FIND_DATAW found;
     HANDLE find;
     swprintf(box, 8192, L"%ls Please send a screenshot of this.\n\nFiles:", title);
-    swprintf(pattern, 512, L"%ls\\logs\\ENTRY-%ls.*", KIT, bridge_token);
+    swprintf(box + wcslen(box), 8192 - wcslen(box), L" (this launch is %ls)", bridge_token);
+    swprintf(pattern, 512, L"%ls\\logs\\*", KIT);
     find = FindFirstFileW(pattern, &found);
     if (find != INVALID_HANDLE_VALUE) {
         do {
-            swprintf(box + wcslen(box), 8192 - wcslen(box), L" %ls (%lu)", found.cFileName + wcslen(bridge_token) + 7,
+            if (found.cFileName[0] == '.') continue;
+            swprintf(box + wcslen(box), 8192 - wcslen(box), L"\n  %ls (%lu)", found.cFileName,
                      (unsigned long)found.nFileSizeLow);
-        } while (FindNextFileW(find, &found));
+        } while (FindNextFileW(find, &found) && wcslen(box) < 6000);
         FindClose(find);
     }
+    append_tail(box, 8192, L"rc", 20);
     append_tail(box, 8192, L"progress", 100);
     append_tail(box, 8192, L"why", 900);
     append_tail(box, 8192, L"log", 900);
