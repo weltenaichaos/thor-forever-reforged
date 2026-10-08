@@ -169,7 +169,7 @@ case "${TF_ENTRY_TOKEN-}" in
     *)
         for tf_entry in "$LOGS"/ENTRY-*.log "$LOGS"/ENTRY-*.started "$LOGS"/ENTRY-*.done \
             "$LOGS"/ENTRY-*.copies "$LOGS"/ENTRY-*.sizes "$LOGS"/ENTRY-*.removed "$LOGS"/ENTRY-*.rc \
-            "$LOGS"/ENTRY-*.state "$LOGS"/ENTRY-*.installed \
+            "$LOGS"/ENTRY-*.state "$LOGS"/ENTRY-*.installed "$LOGS"/ENTRY-*.cpus \
             "$KIT"/ENTRY-*.log "$KIT"/ENTRY-*.started "$KIT"/ENTRY-*.done; do
             [ -f "$tf_entry" ] && [ ! -L "$tf_entry" ] || continue
             [ "$tf_entry" = "$LOGS/${tf_entry##*/}" ] &&
@@ -394,6 +394,12 @@ IFS= read -r tf_kernel </proc/sys/kernel/osrelease 2>/dev/null || tf_kernel=unkn
 tf_ntsync=no
 [ -e /dev/ntsync ] && tf_ntsync=yes
 print -r -- "KERNEL=$tf_kernel NTSYNC_DEVICE=$tf_ntsync"
+tf_online= tf_allowed=
+{ IFS= read -r tf_online </sys/devices/system/cpu/online; } 2>/dev/null
+{ while IFS=$' \t' read -r tf_key tf_val; do
+    [ "$tf_key" = Cpus_allowed_list: ] && { tf_allowed=$tf_val; break; }
+done </proc/$$/status; } 2>/dev/null
+print -r -- "CPUS online=${tf_online:-unknown} allowed=${tf_allowed:-unknown}"
 if [ "$tf_esync" = on ]; then
     # Esync needs one file descriptor per Windows sync object.
     print -r -- "FD_LIMIT soft=$(ulimit -Sn) hard=$(ulimit -Hn)"

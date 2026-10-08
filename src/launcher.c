@@ -162,6 +162,7 @@ static HFONT button_font;
 static int bnet_started, menu_width, menu_height, notice_height;
 static wchar_t notice_buffer[1024];
 static void refresh_copies(void);
+static int refresh_cpus(void);
 static int refresh_install(void);
 static int install_clicked(HWND window);
 static int quit_while_installing(HWND window);
@@ -442,7 +443,7 @@ static void refresh(void)
         SetWindowTextW(status_text, L"Battle.net is closed. The version above is now installed.");
     else
         SetWindowTextW(status_text, L"Press Update with Battle.net to check for a game update.");
-    if (!refresh_install()) refresh_copies();
+    if (!refresh_install() && !refresh_cpus()) refresh_copies();
 }
 
 /* Vertical gradient, one line at a time (no extra library needed). */
@@ -1050,6 +1051,43 @@ static void show_notice(int on)
     GetWindowRect(menu_window, &r);
     SetWindowPos(menu_window, NULL, r.left, r.top + (on ? -notice_height : notice_height) / 2,
                  menu_width, menu_height + (on ? notice_height : 0), SWP_NOZORDER);
+}
+
+/* Whether cpu is in a Linux CPU list such as "0-6" or "0-3,5,7". */
+static int cpu_in_list(const char *list, int cpu)
+{
+    while (*list >= '0' && *list <= '9') {
+        int first = (int)strtol(list, (char **)&list, 10), last = first;
+        if (*list == '-') last = (int)strtol(list + 1, (char **)&list, 10);
+        if (cpu >= first && cpu <= last) return 1;
+        if (*list != ',') break;
+        ++list;
+    }
+    return 0;
+}
+
+/* The waiting bridge writes logs\\ENTRY-<token>.cpus: "ONLINE <list>" (the
+ * cores that are on) and "ALLOWED <list>" (the ones GameHub's processes may
+ * use). When the prime core cpu7 is missing from either, the game starts on
+ * a slower core (installer/launch-game.sh), so the start screen says so. */
+static int refresh_cpus(void)
+{
+    static char data[256];
+    wchar_t path[512];
+    char *online, *allowed;
+    if (!bridge_waiting) return 0;
+    entry_path(path, bridge_token, L"cpus");
+    if (!read_text(path, data, sizeof(data))) return 0;
+    online = strstr(data, "ONLINE ");
+    allowed = strstr(data, "ALLOWED ");
+    /* An empty or unreadable list says nothing either way. */
+    if (!((online && online[7] >= '0' && online[7] <= '9' && !cpu_in_list(online + 7, 7)) ||
+          (allowed && allowed[8] >= '0' && allowed[8] <= '9' && !cpu_in_list(allowed + 8, 7))))
+        return 0;
+    SetWindowTextW(notice_text, L"Your Thor is not letting games use its fastest CPU core right now. "
+                                L"The game still starts, but may run slower. Restarting the Thor brings the core back.");
+    show_notice(1);
+    return 1;
 }
 
 static void refresh_copies(void)

@@ -35,6 +35,14 @@ if [ "${2-}" = wait ]; then
                 mv -f "$tf_at.state.tmp" "$tf_at.state"
         fi
     fi
+    # The cores that are on, and the ones this process may use (.cpus), so
+    # the start screen can warn when the prime core cpu7 is not available.
+    tf_online= tf_allowed=
+    { IFS= read -r tf_online </sys/devices/system/cpu/online; } 2>/dev/null
+    { while IFS=$' \t' read -r tf_key tf_val; do
+        [ "$tf_key" = Cpus_allowed_list: ] && { tf_allowed=$tf_val; break; }
+    done </proc/$$/status; } 2>/dev/null
+    { print -r -- "ONLINE $tf_online"; print -r -- "ALLOWED $tf_allowed"; } >"$tf_at.cpus"
     print -r -- 'READY' >"$tf_at.ready" || exit 3
     read -r tf_up _ </proc/uptime
     tf_end=$((${tf_up%%.*} + 43200))
@@ -78,7 +86,7 @@ if [ "${2-}" = wait ]; then
         done
         /system/bin/toybox sleep 0.5 >/dev/null 2>&1 </dev/null
     done
-    rm -f "$tf_at.go" "$tf_at.ready" "$tf_at.copies" "$tf_at.state"
+    rm -f "$tf_at.go" "$tf_at.ready" "$tf_at.copies" "$tf_at.state" "$tf_at.cpus"
 fi
 print -r -- 'STARTED' >"$KIT/logs/ENTRY-$token.started" || exit 3
 /system/bin/sh "$KIT/installer/launch-game.sh"
