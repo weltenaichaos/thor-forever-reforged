@@ -561,20 +561,41 @@ if [ "$tf_profile" = on ]; then
 fi
 # AFFINITY keeps WoW, Wine and DXVK threads off the small cores. On the
 # Snapdragon 8 Gen 2, cpu0-2 are the small cores and cpu7 is the prime core.
+# tf_core is the single core the one* modes start WoW on (the prime core
+# cpu7 when it is on), tf_rest the mask of every other core.
+tf_core=7 tf_rest=7f
 case "$tf_affinity" in
     big) set -- /system/bin/toybox taskset f8 ;;
     prime3) set -- /system/bin/toybox taskset e0 ;;
-    # one = the prime core only. Slow; only for testing whether a crash
+    # one = a single big core only. Slow; only for testing whether a crash
     # needs threads running at the same time.
     one|one-then-all|one-then-split) set -- /system/bin/toybox taskset 80 ;;
     *) set -- ;;
 esac
 # The cores can be switched off (a power-saving mode, heat): then taskset
 # refuses the mask ("Invalid argument") and WoW would not start at all.
+# The one* modes then use the highest big core that is on, so the startup
+# still runs on a single core; otherwise WoW starts on all cores.
 if [ "$#" -gt 0 ] && ! "$@" /system/bin/toybox true >/dev/null 2>&1 </dev/null; then
-    print -r -- "AFFINITY: the cores for $tf_affinity are not available now; starting WoW on all cores."
     set --
-    tf_affinity=all
+    case "$tf_affinity" in
+        one|one-then-all|one-then-split)
+            for tf_try in 6:40:bf 5:20:df 4:10:ef 3:08:f7; do
+                tf_one=${tf_try#*:}
+                tf_one=${tf_one%:*}
+                if /system/bin/toybox taskset "$tf_one" /system/bin/toybox true >/dev/null 2>&1 </dev/null; then
+                    tf_core=${tf_try%%:*} tf_rest=${tf_try##*:}
+                    set -- /system/bin/toybox taskset "$tf_one"
+                    break
+                fi
+            done ;;
+    esac
+    if [ "$#" -gt 0 ]; then
+        print -r -- "AFFINITY: cpu7 is switched off now; starting WoW on cpu$tf_core instead."
+    else
+        print -r -- "AFFINITY: the cores for $tf_affinity are not available now; starting WoW on all cores."
+        tf_affinity=all
+    fi
 fi
 # WoW writes its own crash reports into Errors inside the private game
 # folder, where they can't be opened on the device. A crash usually ends
@@ -603,14 +624,14 @@ tf_release_once()
         { while IFS=$' \t' read -r tf_key tf_val; do
             [ "$tf_key" = Cpus_allowed_list: ] && { tf_allowed=$tf_val; break; }
         done <"$tf_t/status"; } 2>/dev/null
-        [ "$tf_allowed" = 7 ] || continue
+        [ "$tf_allowed" = "$tf_core" ] || continue
         tf_mask=ff
         if [ "$tf_affinity" = one-then-split ]; then
             tf_p=${tf_t%/task/*}
             tf_n=
             IFS= read -r tf_n <"$tf_p/comm" 2>/dev/null
             [ "$tf_n" = WowB-ARM64.exe ] && [ "${tf_p##*/}" = "${tf_t##*/}" ] && continue
-            tf_mask=7f
+            tf_mask=$tf_rest
         fi
         /system/bin/toybox taskset -p "$tf_mask" "${tf_t##*/}" >/dev/null 2>&1 </dev/null
     done
