@@ -3,6 +3,7 @@
 | Symptom | First check |
 | --- | --- |
 | Settings/account name forgotten | Use the bare custom configuration filename after `-config`; exit through the game menu. Never reset that file on each launch. |
+| WoW closes at once (`WOW_EXIT=1`, wine.log says `taskset: failed to set ... affinity: Invalid argument`), or the start screen says the fastest CPU core is not available | Android has taken the prime core cpu7 away from GameHub (seen once with a full battery and a cool device). The launch log's `CPUS online=... allowed=...` line shows which cores were usable. Thor Forever then starts WoW on the next big core, which may be slower. Restarting the Thor brings cpu7 back. |
 | Battle.net opens instead of the dedicated launcher | Verify Startup File Path and close the previous container session before testing. |
 | Immediately returns to GameHub | Inspect the bridge completion code and latest launch log. Check that the Windows wrapper remains alive and native child streams are redirected. |
 | Bridge returns 141 | The observed setup needed stdout/stderr redirected to a file and stdin to `/dev/null` before launching children. |
