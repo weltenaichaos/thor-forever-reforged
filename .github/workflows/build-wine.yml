@@ -1,7 +1,8 @@
-# Builds Wine's ntdll.so for Android (aarch64) from the same Wine fork and
-# commit as the bundled runtime, plus this repo's esync fix. Only ntdll.so
-# changes, so only that file is kept; it goes into Download/Thor-Forever/
-# wine-test/ for on-device testing. Nothing is published.
+# Builds Wine's ntdll (both halves) and wineserver for Android (aarch64) from
+# the same Wine fork and commit as the bundled runtime, plus this repo's Wine
+# patches. Only those files change, so only they are kept. Nothing is
+# published. A patch that changes server/protocol.def changes both ntdll and
+# wineserver, so the two must always be installed together.
 # The build steps follow the fork's own .github/workflows/build-proton-11.0-1.yml.
 name: Build Wine
 
@@ -100,6 +101,8 @@ jobs:
           for patch in "$GITHUB_WORKSPACE"/patches/wine-*.patch; do
             git apply --verbose "$patch"
           done
+          # Regenerate the server protocol headers from server/protocol.def.
+          tools/make_requests
 
       - name: Build
         working-directory: wine
@@ -120,18 +123,22 @@ jobs:
           dll=$(find . -path '*aarch64-windows*' -name ntdll.dll -type f | head -n 1)
           [ -n "$dll" ] || { echo 'aarch64-windows ntdll.dll not found'; exit 1; }
           cp "$dll" "$GITHUB_WORKSPACE/out/ntdll.dll"
+          # wineserver from the same build: it speaks the same protocol as this ntdll.
+          [ -x server/wineserver ] || { echo 'server/wineserver not found'; exit 1; }
+          "$HOME/Android/Sdk/ndk/27.3.13750724/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" \
+            -o "$GITHUB_WORKSPACE/out/wineserver" server/wineserver
           {
             echo "wine_repo=$WINE_REPO"
             echo "wine_ref=$WINE_REF"
             echo "repo_commit=$GITHUB_SHA"
-            echo "built_from=$so $dll"
+            echo "built_from=$so $dll server/wineserver"
             echo "variant=${{ matrix.variant }}"
             [ "${{ matrix.variant }}" = plain ] ||
               echo "patches=$(cd "$GITHUB_WORKSPACE/patches" && ls wine-*.patch | tr '\n' ' ')"
           } > "$GITHUB_WORKSPACE/out/BUILD-INFO.txt"
-          cd "$GITHUB_WORKSPACE/out" && sha256sum ntdll.so ntdll.dll > SHA256SUMS.txt
+          cd "$GITHUB_WORKSPACE/out" && sha256sum ntdll.so ntdll.dll wineserver > SHA256SUMS.txt
           cat BUILD-INFO.txt SHA256SUMS.txt
-          file ntdll.so ntdll.dll
+          file ntdll.so ntdll.dll wineserver
 
       - uses: actions/upload-artifact@v4
         with:
