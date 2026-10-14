@@ -1,0 +1,166 @@
+esync: send a new event's fd with the create_event reply
+
+With esync, a new event cost three wineserver round trips before its first
+wait: create_event, get_inproc_sync_fd for its eventfd, and later close_handle.
+WoW creates and closes about 1,000 to 1,300 short-lived events a second on each
+of three threads. The server now passes the eventfd along with the
+create_event reply, so get_inproc_sync_fd is no longer needed for them.
+
+Changes the server protocol: ntdll and wineserver must come from the same build.
+
+diff --git a/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
+index ea7722d..efcab06 100644
+--- a/dlls/ntdll/unix/esync.c
++++ b/dlls/ntdll/unix/esync.c
+@@ -385,6 +385,20 @@ static void esync_close_fd_later( int fd )
+     if (old >= 0) close( old );
+ }
+ 
++/* Caches the fd the server sent along with the handle of a new object, so the first wait on
++ * it needs no get_inproc_sync_fd request. Caller must hold fd_cache_mutex. */
++void esync_add_new_object( HANDLE handle, int type, int fd, unsigned int shm_idx )
++{
++    if ((fd = esync_move_fd_high( fd )) < 0)
++    {
++        /* Not cached: the first use of the object asks the server for the fd as before. */
++        log_missing_fd( handle, type );
++        return;
++    }
++    /* add_to_list() closes our fd itself when another thread cached the handle first. */
++    if (!add_to_list( handle, type, fd, shm_idx ? get_shm( shm_idx ) : 0 )) close( fd );
++}
++
+ NTSTATUS esync_close( HANDLE handle )
+ {
+     UINT_PTR entry, idx = handle_to_index( handle, &entry );
+diff --git a/dlls/ntdll/unix/esync.h b/dlls/ntdll/unix/esync.h
+index 1d01261..e834085 100644
+--- a/dlls/ntdll/unix/esync.h
++++ b/dlls/ntdll/unix/esync.h
+@@ -21,6 +21,7 @@
+ extern int do_esync(void);
+ extern void esync_init(int fd);
+ extern NTSTATUS esync_close( HANDLE handle );
++extern void esync_add_new_object( HANDLE handle, int type, int fd, unsigned int shm_idx );
+ 
+ extern NTSTATUS esync_create_semaphore(HANDLE *handle, ACCESS_MASK access,
+     const OBJECT_ATTRIBUTES *attr, LONG initial, LONG max);
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 2bf677a..8473812 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -1141,6 +1141,10 @@ NTSTATUS WINAPI NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_
+     unsigned int ret;
+     data_size_t len;
+     struct object_attributes *objattr;
++    int sync_type = 0;
++    unsigned int sync_shm_idx = 0;
++    BOOL esync = do_esync();
++    sigset_t sigset;
+ 
+     TRACE( "access %#x, name %s, type %u, state %u\n", access,
+            attr ? debugstr_us(attr->ObjectName) : "(null)", type, state );
+@@ -1149,6 +1153,9 @@ NTSTATUS WINAPI NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_
+     if (type != NotificationEvent && type != SynchronizationEvent) return STATUS_INVALID_PARAMETER;
+     if ((ret = alloc_object_attributes( attr, &objattr, &len ))) return ret;
+ 
++    /* With esync the server sends the new event's fd along with the reply; hold
++     * fd_cache_mutex so no other thread receives it first. */
++    if (esync) server_enter_uninterrupted_section( &fd_cache_mutex, &sigset );
+     SERVER_START_REQ( create_event )
+     {
+         req->access = access;
+@@ -1157,8 +1164,18 @@ NTSTATUS WINAPI NtCreateEvent( HANDLE *handle, ACCESS_MASK access, const OBJECT_
+         wine_server_add_data( req, objattr, len );
+         ret = wine_server_call( req );
+         *handle = wine_server_ptr_handle( reply->handle );
++        sync_type = reply->sync_type;
++        sync_shm_idx = reply->sync_shm_idx;
+     }
+     SERVER_END_REQ;
++    if (sync_type)
++    {
++        obj_handle_t fd_handle;
++        int fd = wine_server_receive_fd( &fd_handle );
++        assert( wine_server_ptr_handle(fd_handle) == *handle );
++        esync_add_new_object( *handle, sync_type, fd, sync_shm_idx );
++    }
++    if (esync) server_leave_uninterrupted_section( &fd_cache_mutex, &sigset );
+ 
+     free( objattr );
+     return ret;
+diff --git a/server/event.c b/server/event.c
+index b70e9e0..fff26a8 100644
+--- a/server/event.c
++++ b/server/event.c
+@@ -393,6 +393,7 @@ DECL_HANDLER(create_event)
+         else
+             reply->handle = alloc_handle_no_access_check( current->process, event,
+                                                           req->access, objattr->attributes );
++        reply->sync_type = send_new_esync_fd( &event->obj, reply->handle, &reply->sync_shm_idx );
+         release_object( event );
+     }
+ 
+diff --git a/server/inproc_sync.c b/server/inproc_sync.c
+index 497e9a9..60bfd83 100644
+--- a/server/inproc_sync.c
++++ b/server/inproc_sync.c
+@@ -343,6 +343,20 @@ static int get_obj_inproc_sync( struct object *obj, int *type, unsigned int *esy
+     return fd;
+ }
+ 
++/* With esync, send the fd of a newly created object along with the reply that creates it, so
++ * the client doesn't need a get_inproc_sync_fd request for it right after. Returns the esync
++ * type of the fd sent, or 0 when none was sent. */
++int send_new_esync_fd( struct object *obj, obj_handle_t handle, unsigned int *shm_idx )
++{
++    int type = 0, fd;
++
++    *shm_idx = 0;
++    if (!do_esync() || !handle) return 0;
++    if ((fd = get_obj_inproc_sync( obj, &type, shm_idx )) < 0 || !type) return 0;
++    if (send_client_fd( current->process, fd, handle ) == -1) return 0;
++    return type;
++}
++
+ #else /* NTSYNC_IOC_EVENT_READ */
+ 
+ int get_inproc_device_fd(void)
+@@ -392,6 +406,12 @@ static int get_obj_inproc_sync( struct object *obj, int *type, unsigned int *esy
+     return -1;
+ }
+ 
++int send_new_esync_fd( struct object *obj, obj_handle_t handle, unsigned int *shm_idx )
++{
++    *shm_idx = 0;
++    return 0;
++}
++
+ #endif /* NTSYNC_IOC_EVENT_READ */
+ 
+ DECL_HANDLER(get_inproc_sync_fd)
+diff --git a/server/object.h b/server/object.h
+index 21f5ea8..baa4046 100644
+--- a/server/object.h
++++ b/server/object.h
+@@ -252,6 +252,7 @@ extern int get_inproc_device_fd(void);
+ extern int get_inproc_sync_fd( struct inproc_sync *sync );
+ extern struct inproc_sync *create_inproc_internal_sync( int manual, int signaled );
+ extern struct inproc_sync *create_inproc_event_sync( int manual, int signaled );
++extern int send_new_esync_fd( struct object *obj, obj_handle_t handle, unsigned int *shm_idx );
+ extern struct inproc_sync *create_inproc_semaphore_sync( unsigned int initial, unsigned int max );
+ extern struct inproc_sync *create_inproc_mutex_sync( thread_id_t owner, unsigned int count );
+ extern void abandon_inproc_mutexes( thread_id_t owner );
+diff --git a/server/protocol.def b/server/protocol.def
+index c3f23a8..37cf2e1 100644
+--- a/server/protocol.def
++++ b/server/protocol.def
+@@ -1475,6 +1475,8 @@ struct cpu_topology_override
+     VARARG(objattr,object_attributes); /* object attributes */
+ @REPLY
+     obj_handle_t handle;        /* handle to the event */
++    int          sync_type;     /* esync: type of the fd sent with the reply, 0 if none */
++    unsigned int sync_shm_idx;  /* esync: shared memory index of that fd */
+ @END
+ 
+ /* Event operation */

@@ -1,0 +1,31 @@
+esync: a wait on the thread's own process or thread waits out its timeout
+
+WoW waits on GetCurrentProcess() with a timeout to sleep. With esync, ntdll
+passes pseudo-handles to the server, and the server can't wait on a process
+or thread there: their sync object is an in-process one, whose add_queue is
+no_add_queue. So the wait failed at once with STATUS_OBJECT_TYPE_MISMATCH and
+WoW called it again, about 35,000 times a second from one thread. That thread
+used about 45% of a core and Wine's server another 45%.
+
+Such a wait can never be satisfied while the thread is waiting, so wait for
+the timeout alone (or an APC when alertable), like Windows does.
+
+diff --git a/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
+index efcab06..0d67dd1 100644
+--- a/dlls/ntdll/unix/esync.c
++++ b/dlls/ntdll/unix/esync.c
+@@ -944,6 +944,14 @@ static NTSTATUS __esync_wait_objects( DWORD count, const HANDLE *handles, BOOLEA
+         ntdll_get_thread_data()->alert_fd = fd;
+     }
+ 
++    /* A thread can never see its own process or thread signaled while it waits on it, and
++     * WoW waits on GetCurrentProcess() with a timeout as a way to sleep. The server can't
++     * wait on these here (their sync object lives in the client), so it failed the wait at
++     * once and the caller looped, about 35,000 times a second. Just wait out the timeout
++     * (or an APC, if alertable), which is what Windows does. */
++    if (count == 1 && (handles[0] == NtCurrentProcess() || handles[0] == NtCurrentThread()))
++        count = 0;
++
+     NtQuerySystemTime( &now );
+     if (timeout)
+     {

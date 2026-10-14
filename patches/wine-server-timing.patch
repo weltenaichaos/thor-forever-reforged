@@ -1,0 +1,354 @@
+Wine server: with WINESERVER_STATS=1, time where the server's time goes
+
+Debug only, off unless the app sets WINESERVER_STATS=1. Every 5 seconds the
+server prints one line to stderr (the Wine log):
+
+  wineserver-stats: 5.0 s: cpu user U ms sys S ms, waiting W ms, N wakeups E events,
+  R requests: handling H ms, reading Q ms, replying P ms; slowest: name count/ms ...
+
+cpu user/sys come from getrusage, so they are the server's real CPU time.
+waiting is the time spent in epoll_wait. handling is the time inside request
+handlers, per request type for the slowest ten; reading and replying are the
+pipe reads and writes around them. What is left of the awake time goes to
+fd events, timers and the rest of the main loop.
+
+A second line lists the most frequent select calls: which thread (with its
+Linux thread id, to match the cpu log), what it waits on, the timeout kind
+and the result.
+
+diff --git a/server/fd.c b/server/fd.c
+index aa71e6d..c672968 100644
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -607,11 +607,15 @@ static inline void main_loop_epoll(void)
+ 
+     while (active_users)
+     {
++        unsigned long long wait_start;
++
+         timeout = get_next_timeout( &ts );
+ 
+         if (!active_users) break;  /* last user removed by a timeout */
+         if (epoll_fd == -1) break;  /* an error occurred with epoll */
+ 
++        wait_start = server_stats ? server_stats_now() : 0;
++
+ #ifdef HAVE_EPOLL_PWAIT2
+         if (!failed_epoll_pwait2)
+         {
+@@ -623,6 +627,7 @@ static inline void main_loop_epoll(void)
+ #endif
+             ret = epoll_wait( epoll_fd, events, ARRAY_SIZE( events ), timeout );
+ 
++        if (wait_start) server_stats_waited( wait_start, ret );
+         set_current_time();
+ 
+         /* put the events into the pollfd array first, like poll does */
+@@ -989,6 +994,7 @@ void main_loop(void)
+ 
+     set_current_time();
+     server_start_time = current_time;
++    server_stats = getenv( "WINESERVER_STATS" ) && atoi( getenv( "WINESERVER_STATS" ) );
+ 
+     main_loop_epoll();
+     /* fall through to normal poll loop */
+diff --git a/server/request.c b/server/request.c
+index 5d4358f..8b8da63 100644
+--- a/server/request.c
++++ b/server/request.c
+@@ -33,6 +33,8 @@
+ #include <string.h>
+ #include <sys/stat.h>
+ #include <sys/time.h>
++#include <sys/resource.h>
++#include <time.h>
+ #include <sys/types.h>
+ #include <sys/socket.h>
+ #include <sys/wait.h>
+@@ -246,6 +248,74 @@ void write_reply( struct thread *thread )
+         fatal_protocol_error( thread, "reply write: %s\n", strerror( errno ));
+ }
+ 
++/* With WINESERVER_STATS=1 (the app's "Debug: time Wine server calls"), measure where the
++ * server's time goes and print a summary to stderr every 5 seconds: its CPU time, how long
++ * it waited for work, and which request types took longest to handle. */
++int server_stats;
++static struct
++{
++    unsigned int count;
++    unsigned long long ns;
++} server_stats_req[REQ_NB_REQUESTS];
++static unsigned long long server_stats_start, server_stats_wait_ns, server_stats_read_ns, server_stats_reply_ns;
++static unsigned long long server_stats_user_ns, server_stats_sys_ns;
++static unsigned int server_stats_wakeups, server_stats_events;
++
++unsigned long long server_stats_now(void)
++{
++    struct timespec ts;
++    clock_gettime( CLOCK_MONOTONIC, &ts );
++    return ts.tv_sec * 1000000000ull + ts.tv_nsec;
++}
++
++/* called by the main loop after each wait for work */
++void server_stats_waited( unsigned long long start, int events )
++{
++    unsigned long long now = server_stats_now(), user, sys, handled_ns = 0;
++    unsigned int i, j, top, requests = 0;
++    struct rusage ru;
++
++    server_stats_wait_ns += now - start;
++    server_stats_wakeups++;
++    if (events > 0) server_stats_events += events;
++    if (server_stats_start && now - server_stats_start < 5000000000ull) return;
++
++    getrusage( RUSAGE_SELF, &ru );
++    user = ru.ru_utime.tv_sec * 1000000000ull + ru.ru_utime.tv_usec * 1000ull;
++    sys = ru.ru_stime.tv_sec * 1000000000ull + ru.ru_stime.tv_usec * 1000ull;
++    if (server_stats_start)
++    {
++        for (i = 0; i < REQ_NB_REQUESTS; i++)
++        {
++            requests += server_stats_req[i].count;
++            handled_ns += server_stats_req[i].ns;
++        }
++        fprintf( stderr, "wineserver-stats: %.1f s: cpu user %.0f ms sys %.0f ms, waiting %.0f ms, %u wakeups %u events, "
++                 "%u requests: handling %.0f ms, reading %.0f ms, replying %.0f ms; slowest:",
++                 (now - server_stats_start) / 1e9, (user - server_stats_user_ns) / 1e6, (sys - server_stats_sys_ns) / 1e6,
++                 server_stats_wait_ns / 1e6, server_stats_wakeups, server_stats_events, requests, handled_ns / 1e6,
++                 server_stats_read_ns / 1e6, server_stats_reply_ns / 1e6 );
++        for (j = 0; j < 10; j++)
++        {
++            top = REQ_NB_REQUESTS;
++            for (i = 0; i < REQ_NB_REQUESTS; i++)
++                if (server_stats_req[i].count && (top == REQ_NB_REQUESTS || server_stats_req[i].ns > server_stats_req[top].ns))
++                    top = i;
++            if (top == REQ_NB_REQUESTS) break;
++            fprintf( stderr, " %s %u/%.1fms", get_req_name( top ), server_stats_req[top].count, server_stats_req[top].ns / 1e6 );
++            server_stats_req[top].count = 0;  /* printed */
++        }
++        fprintf( stderr, "\n" );
++        select_stats_report();
++    }
++    memset( server_stats_req, 0, sizeof(server_stats_req) );
++    server_stats_wait_ns = server_stats_read_ns = server_stats_reply_ns = 0;
++    server_stats_wakeups = server_stats_events = 0;
++    server_stats_user_ns = user;
++    server_stats_sys_ns = sys;
++    server_stats_start = now;
++}
++
+ /* send a reply to the current thread */
+ static void send_reply( union generic_reply *reply )
+ {
+@@ -293,6 +363,7 @@ static void call_req_handler( struct thread *thread )
+ {
+     union generic_reply reply;
+     enum request req = thread->req.request_header.req;
++    unsigned long long start = server_stats ? server_stats_now() : 0, handled = 0;
+ 
+     current = thread;
+     current->reply_size = 0;
+@@ -306,6 +377,8 @@ static void call_req_handler( struct thread *thread )
+     else
+         set_error( STATUS_NOT_IMPLEMENTED );
+ 
++    if (start) handled = server_stats_now();
++
+     if (current)
+     {
+         if (current->reply_fd)
+@@ -321,6 +394,12 @@ static void call_req_handler( struct thread *thread )
+             kill_thread( current, 1 );  /* no way to continue without reply fd */
+         }
+     }
++    if (start && req < REQ_NB_REQUESTS)
++    {
++        server_stats_req[req].count++;
++        server_stats_req[req].ns += handled - start;
++        server_stats_reply_ns += server_stats_now() - handled;
++    }
+     current = NULL;
+ }
+ 
+@@ -331,8 +410,11 @@ void read_request( struct thread *thread )
+ 
+     if (!thread->req_toread)  /* no pending request */
+     {
+-        if ((ret = read( get_unix_fd( thread->request_fd ), &thread->req,
+-                         sizeof(thread->req) )) != sizeof(thread->req)) goto error;
++        unsigned long long start = server_stats ? server_stats_now() : 0;
++
++        ret = read( get_unix_fd( thread->request_fd ), &thread->req, sizeof(thread->req) );
++        if (start) server_stats_read_ns += server_stats_now() - start;
++        if (ret != sizeof(thread->req)) goto error;
+         if (!(thread->req_toread = thread->req.request_header.request_size))
+         {
+             /* no data, handle request at once */
+@@ -350,10 +432,13 @@ void read_request( struct thread *thread )
+     /* read the variable sized data */
+     for (;;)
+     {
++        unsigned long long start = server_stats ? server_stats_now() : 0;
++
+         ret = read( get_unix_fd( thread->request_fd ),
+                     (char *)thread->req_data + thread->req.request_header.request_size
+                       - thread->req_toread,
+                     thread->req_toread );
++        if (start) server_stats_read_ns += server_stats_now() - start;
+         if (ret <= 0) break;
+         if (!(thread->req_toread -= ret))
+         {
+diff --git a/server/request.h b/server/request.h
+index 13254d9..a6c51ca 100644
+--- a/server/request.h
++++ b/server/request.h
+@@ -63,6 +63,11 @@ extern int kill_lock_owner( int sig );
+ extern char *server_dir;
+ extern int server_dir_fd, config_dir_fd;
+ 
++extern int server_stats;
++extern unsigned long long server_stats_now(void);
++extern void server_stats_waited( unsigned long long start, int events );
++extern const char *get_req_name( enum request req );
++extern void select_stats_report(void);
+ extern void trace_request(void);
+ extern void trace_reply( enum request req, const union generic_reply *reply );
+ 
+diff --git a/server/thread.c b/server/thread.c
+index 1938eb7..696ae29 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -2010,6 +2010,109 @@ DECL_HANDLER(resume_thread)
+ }
+ 
+ /* select on a handle list */
++/* WINESERVER_STATS: which threads call select most often, and what they wait on */
++struct select_stat
++{
++    thread_id_t  tid;
++    process_id_t pid;
++    int          unix_tid;
++    unsigned int op, handles, flags, status;
++    obj_handle_t handle;   /* first handle waited on */
++    int          timeout;  /* 0 none (poll), 1 infinite, 2 deadline */
++    char         type[16];
++    unsigned int calls;
++};
++static struct select_stat select_stats[48];
++static unsigned int select_stats_other;
++
++static void select_stats_add( const union select_op *op, data_size_t op_size, unsigned int flags, timeout_t timeout )
++{
++    struct select_stat key;
++    obj_handle_t handle = 0;
++    struct object *obj;
++    unsigned int i;
++
++    memset( &key, 0, sizeof(key) );
++    key.tid = current->id;
++    key.pid = current->process->id;
++    key.unix_tid = current->unix_tid;
++    key.op = op_size >= sizeof(op->op) ? op->op : SELECT_NONE;
++    key.flags = flags;
++    key.status = get_error();
++    key.timeout = !timeout ? 0 : timeout == TIMEOUT_INFINITE ? 1 : 2;
++    switch (key.op)
++    {
++    case SELECT_WAIT:
++    case SELECT_WAIT_ALL:
++        key.handles = (op_size - offsetof( union select_op, wait.handles )) / sizeof(obj_handle_t);
++        if (key.handles) handle = op->wait.handles[0];
++        break;
++    case SELECT_SIGNAL_AND_WAIT:
++        handle = op->signal_and_wait.wait;
++        break;
++    case SELECT_KEYED_EVENT_WAIT:
++    case SELECT_KEYED_EVENT_RELEASE:
++        handle = op->keyed_event.handle;
++        break;
++    }
++    key.handle = handle;
++    if (handle && (obj = get_handle_obj( current->process, handle, 0, NULL )))
++    {
++        const struct unicode_str *name = &obj->ops->type->name;
++        for (i = 0; i < name->len / sizeof(WCHAR) && i < sizeof(key.type) - 1; i++)
++            key.type[i] = name->str[i] < 0x80 ? name->str[i] : '?';
++        release_object( obj );
++    }
++    clear_error();
++    set_error( key.status );
++
++    for (i = 0; i < ARRAY_SIZE(select_stats) && select_stats[i].calls; i++)
++    {
++        struct select_stat *s = &select_stats[i];
++        if (s->tid == key.tid && s->op == key.op && s->handles == key.handles && s->flags == key.flags &&
++            s->status == key.status && s->handle == key.handle && s->timeout == key.timeout && !strcmp( s->type, key.type ))
++        {
++            s->calls++;
++            return;
++        }
++    }
++    if (i == ARRAY_SIZE(select_stats))
++    {
++        select_stats_other++;
++        return;
++    }
++    key.calls = 1;
++    select_stats[i] = key;
++}
++
++/* print the most frequent select calls since the last report */
++void select_stats_report(void)
++{
++    static const char * const ops[] = { "none", "wait", "wait_all", "signal_and_wait", "keyed_wait", "keyed_release" };
++    static const char * const timeouts[] = { "poll", "infinite", "deadline" };
++    unsigned int i, j, top;
++
++    fprintf( stderr, "wineserver-selects:" );
++    for (j = 0; j < 8; j++)
++    {
++        top = ARRAY_SIZE(select_stats);
++        for (i = 0; i < ARRAY_SIZE(select_stats) && select_stats[i].calls; i++)
++            if (select_stats[i].calls != ~0u && (top == ARRAY_SIZE(select_stats) || select_stats[i].calls > select_stats[top].calls))
++                top = i;
++        if (top == ARRAY_SIZE(select_stats)) break;
++        fprintf( stderr, " [%u x thread %04x of process %04x (linux %d) %s %u handles %s %08x flags %x %s -> %08x]",
++                 select_stats[top].calls, select_stats[top].tid, select_stats[top].pid, select_stats[top].unix_tid,
++                 select_stats[top].op < ARRAY_SIZE(ops) ? ops[select_stats[top].op] : "?", select_stats[top].handles,
++                 select_stats[top].type[0] ? select_stats[top].type : "-", select_stats[top].handle, select_stats[top].flags,
++                 timeouts[select_stats[top].timeout], select_stats[top].status );
++        select_stats[top].calls = ~0u;  /* printed */
++    }
++    if (select_stats_other) fprintf( stderr, " [%u other]", select_stats_other );
++    fprintf( stderr, "\n" );
++    memset( select_stats, 0, sizeof(select_stats) );
++    select_stats_other = 0;
++}
++
+ DECL_HANDLER(select)
+ {
+     union select_op select_op;
+@@ -2096,6 +2199,7 @@ DECL_HANDLER(select)
+     }
+ 
+     reply->signaled = select_on( &select_op, op_size, req->cookie, req->flags, req->timeout );
++    if (server_stats) select_stats_add( &select_op, op_size, req->flags, req->timeout );
+ 
+     if (get_error() == STATUS_USER_APC && get_reply_max_size() >= sizeof(union apc_call))
+     {
+diff --git a/server/trace.c b/server/trace.c
+index 80621d5..b3ea201 100644
+--- a/server/trace.c
++++ b/server/trace.c
+@@ -1599,6 +1599,11 @@ static void dump_varargs_monitor_infos( const char *prefix, data_size_t size )
+     remove_data( size );
+ }
+ 
++const char *get_req_name( enum request req )
++{
++    return req < REQ_NB_REQUESTS ? req_names[req] : "?";
++}
++
+ void trace_request(void)
+ {
+     enum request req = current->req.request_header.req;
