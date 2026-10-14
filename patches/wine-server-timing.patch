@@ -12,6 +12,10 @@ handlers, per request type for the slowest ten; reading and replying are the
 pipe reads and writes around them. What is left of the awake time goes to
 fd events, timers and the rest of the main loop.
 
+A second line lists the most frequent select calls: which thread (with its
+Linux thread id, to match the cpu log), what it waits on, the timeout kind
+and the result.
+
 diff --git a/server/fd.c b/server/fd.c
 index aa71e6d..c672968 100644
 --- a/server/fd.c
@@ -49,7 +53,7 @@ index aa71e6d..c672968 100644
      main_loop_epoll();
      /* fall through to normal poll loop */
 diff --git a/server/request.c b/server/request.c
-index 5d4358f..fac196c 100644
+index 5d4358f..8b8da63 100644
 --- a/server/request.c
 +++ b/server/request.c
 @@ -33,6 +33,8 @@
@@ -61,7 +65,7 @@ index 5d4358f..fac196c 100644
  #include <sys/types.h>
  #include <sys/socket.h>
  #include <sys/wait.h>
-@@ -246,6 +248,73 @@ void write_reply( struct thread *thread )
+@@ -246,6 +248,74 @@ void write_reply( struct thread *thread )
          fatal_protocol_error( thread, "reply write: %s\n", strerror( errno ));
  }
  
@@ -123,6 +127,7 @@ index 5d4358f..fac196c 100644
 +            server_stats_req[top].count = 0;  /* printed */
 +        }
 +        fprintf( stderr, "\n" );
++        select_stats_report();
 +    }
 +    memset( server_stats_req, 0, sizeof(server_stats_req) );
 +    server_stats_wait_ns = server_stats_read_ns = server_stats_reply_ns = 0;
@@ -135,7 +140,7 @@ index 5d4358f..fac196c 100644
  /* send a reply to the current thread */
  static void send_reply( union generic_reply *reply )
  {
-@@ -293,6 +362,7 @@ static void call_req_handler( struct thread *thread )
+@@ -293,6 +363,7 @@ static void call_req_handler( struct thread *thread )
  {
      union generic_reply reply;
      enum request req = thread->req.request_header.req;
@@ -143,7 +148,7 @@ index 5d4358f..fac196c 100644
  
      current = thread;
      current->reply_size = 0;
-@@ -306,6 +376,8 @@ static void call_req_handler( struct thread *thread )
+@@ -306,6 +377,8 @@ static void call_req_handler( struct thread *thread )
      else
          set_error( STATUS_NOT_IMPLEMENTED );
  
@@ -152,7 +157,7 @@ index 5d4358f..fac196c 100644
      if (current)
      {
          if (current->reply_fd)
-@@ -321,6 +393,12 @@ static void call_req_handler( struct thread *thread )
+@@ -321,6 +394,12 @@ static void call_req_handler( struct thread *thread )
              kill_thread( current, 1 );  /* no way to continue without reply fd */
          }
      }
@@ -165,7 +170,7 @@ index 5d4358f..fac196c 100644
      current = NULL;
  }
  
-@@ -331,8 +409,11 @@ void read_request( struct thread *thread )
+@@ -331,8 +410,11 @@ void read_request( struct thread *thread )
  
      if (!thread->req_toread)  /* no pending request */
      {
@@ -179,7 +184,7 @@ index 5d4358f..fac196c 100644
          if (!(thread->req_toread = thread->req.request_header.request_size))
          {
              /* no data, handle request at once */
-@@ -350,10 +431,13 @@ void read_request( struct thread *thread )
+@@ -350,10 +432,13 @@ void read_request( struct thread *thread )
      /* read the variable sized data */
      for (;;)
      {
@@ -194,10 +199,10 @@ index 5d4358f..fac196c 100644
          if (!(thread->req_toread -= ret))
          {
 diff --git a/server/request.h b/server/request.h
-index 13254d9..a63ae71 100644
+index 13254d9..a6c51ca 100644
 --- a/server/request.h
 +++ b/server/request.h
-@@ -63,6 +63,10 @@ extern int kill_lock_owner( int sig );
+@@ -63,6 +63,11 @@ extern int kill_lock_owner( int sig );
  extern char *server_dir;
  extern int server_dir_fd, config_dir_fd;
  
@@ -205,9 +210,130 @@ index 13254d9..a63ae71 100644
 +extern unsigned long long server_stats_now(void);
 +extern void server_stats_waited( unsigned long long start, int events );
 +extern const char *get_req_name( enum request req );
++extern void select_stats_report(void);
  extern void trace_request(void);
  extern void trace_reply( enum request req, const union generic_reply *reply );
  
+diff --git a/server/thread.c b/server/thread.c
+index 1938eb7..3567d23 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -2010,6 +2010,107 @@ DECL_HANDLER(resume_thread)
+ }
+ 
+ /* select on a handle list */
++/* WINESERVER_STATS: which threads call select most often, and what they wait on */
++struct select_stat
++{
++    thread_id_t  tid;
++    process_id_t pid;
++    int          unix_tid;
++    unsigned int op, handles, flags, status;
++    int          timeout;  /* 0 none (poll), 1 infinite, 2 deadline */
++    char         type[16];
++    unsigned int calls;
++};
++static struct select_stat select_stats[48];
++static unsigned int select_stats_other;
++
++static void select_stats_add( const union select_op *op, data_size_t op_size, unsigned int flags, timeout_t timeout )
++{
++    struct select_stat key;
++    obj_handle_t handle = 0;
++    struct object *obj;
++    unsigned int i;
++
++    memset( &key, 0, sizeof(key) );
++    key.tid = current->id;
++    key.pid = current->process->id;
++    key.unix_tid = current->unix_tid;
++    key.op = op_size >= sizeof(op->op) ? op->op : SELECT_NONE;
++    key.flags = flags;
++    key.status = get_error();
++    key.timeout = !timeout ? 0 : timeout == TIMEOUT_INFINITE ? 1 : 2;
++    switch (key.op)
++    {
++    case SELECT_WAIT:
++    case SELECT_WAIT_ALL:
++        key.handles = (op_size - offsetof( union select_op, wait.handles )) / sizeof(obj_handle_t);
++        if (key.handles) handle = op->wait.handles[0];
++        break;
++    case SELECT_SIGNAL_AND_WAIT:
++        handle = op->signal_and_wait.wait;
++        break;
++    case SELECT_KEYED_EVENT_WAIT:
++    case SELECT_KEYED_EVENT_RELEASE:
++        handle = op->keyed_event.handle;
++        break;
++    }
++    if (handle && (obj = get_handle_obj( current->process, handle, 0, NULL )))
++    {
++        const struct unicode_str *name = &obj->ops->type->name;
++        for (i = 0; i < name->len / sizeof(WCHAR) && i < sizeof(key.type) - 1; i++)
++            key.type[i] = name->str[i] < 0x80 ? name->str[i] : '?';
++        release_object( obj );
++    }
++    clear_error();
++    set_error( key.status );
++
++    for (i = 0; i < ARRAY_SIZE(select_stats) && select_stats[i].calls; i++)
++    {
++        struct select_stat *s = &select_stats[i];
++        if (s->tid == key.tid && s->op == key.op && s->handles == key.handles && s->flags == key.flags &&
++            s->status == key.status && s->timeout == key.timeout && !strcmp( s->type, key.type ))
++        {
++            s->calls++;
++            return;
++        }
++    }
++    if (i == ARRAY_SIZE(select_stats))
++    {
++        select_stats_other++;
++        return;
++    }
++    key.calls = 1;
++    select_stats[i] = key;
++}
++
++/* print the most frequent select calls since the last report */
++void select_stats_report(void)
++{
++    static const char * const ops[] = { "none", "wait", "wait_all", "signal_and_wait", "keyed_wait", "keyed_release" };
++    static const char * const timeouts[] = { "poll", "infinite", "deadline" };
++    unsigned int i, j, top;
++
++    fprintf( stderr, "wineserver-selects:" );
++    for (j = 0; j < 8; j++)
++    {
++        top = ARRAY_SIZE(select_stats);
++        for (i = 0; i < ARRAY_SIZE(select_stats) && select_stats[i].calls; i++)
++            if (select_stats[i].calls != ~0u && (top == ARRAY_SIZE(select_stats) || select_stats[i].calls > select_stats[top].calls))
++                top = i;
++        if (top == ARRAY_SIZE(select_stats)) break;
++        fprintf( stderr, " [%u x thread %04x of process %04x (linux %d) %s %u handles %s flags %x %s -> %08x]",
++                 select_stats[top].calls, select_stats[top].tid, select_stats[top].pid, select_stats[top].unix_tid,
++                 select_stats[top].op < ARRAY_SIZE(ops) ? ops[select_stats[top].op] : "?", select_stats[top].handles,
++                 select_stats[top].type[0] ? select_stats[top].type : "-", select_stats[top].flags,
++                 timeouts[select_stats[top].timeout], select_stats[top].status );
++        select_stats[top].calls = ~0u;  /* printed */
++    }
++    if (select_stats_other) fprintf( stderr, " [%u other]", select_stats_other );
++    fprintf( stderr, "\n" );
++    memset( select_stats, 0, sizeof(select_stats) );
++    select_stats_other = 0;
++}
++
+ DECL_HANDLER(select)
+ {
+     union select_op select_op;
+@@ -2096,6 +2197,7 @@ DECL_HANDLER(select)
+     }
+ 
+     reply->signaled = select_on( &select_op, op_size, req->cookie, req->flags, req->timeout );
++    if (server_stats) select_stats_add( &select_op, op_size, req->flags, req->timeout );
+ 
+     if (get_error() == STATUS_USER_APC && get_reply_max_size() >= sizeof(union apc_call))
+     {
 diff --git a/server/trace.c b/server/trace.c
 index 80621d5..b3ea201 100644
 --- a/server/trace.c
