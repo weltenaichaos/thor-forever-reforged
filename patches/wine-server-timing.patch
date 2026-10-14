@@ -215,10 +215,10 @@ index 13254d9..a6c51ca 100644
  extern void trace_reply( enum request req, const union generic_reply *reply );
  
 diff --git a/server/thread.c b/server/thread.c
-index 1938eb7..3567d23 100644
+index 1938eb7..696ae29 100644
 --- a/server/thread.c
 +++ b/server/thread.c
-@@ -2010,6 +2010,107 @@ DECL_HANDLER(resume_thread)
+@@ -2010,6 +2010,109 @@ DECL_HANDLER(resume_thread)
  }
  
  /* select on a handle list */
@@ -229,6 +229,7 @@ index 1938eb7..3567d23 100644
 +    process_id_t pid;
 +    int          unix_tid;
 +    unsigned int op, handles, flags, status;
++    obj_handle_t handle;   /* first handle waited on */
 +    int          timeout;  /* 0 none (poll), 1 infinite, 2 deadline */
 +    char         type[16];
 +    unsigned int calls;
@@ -266,6 +267,7 @@ index 1938eb7..3567d23 100644
 +        handle = op->keyed_event.handle;
 +        break;
 +    }
++    key.handle = handle;
 +    if (handle && (obj = get_handle_obj( current->process, handle, 0, NULL )))
 +    {
 +        const struct unicode_str *name = &obj->ops->type->name;
@@ -280,7 +282,7 @@ index 1938eb7..3567d23 100644
 +    {
 +        struct select_stat *s = &select_stats[i];
 +        if (s->tid == key.tid && s->op == key.op && s->handles == key.handles && s->flags == key.flags &&
-+            s->status == key.status && s->timeout == key.timeout && !strcmp( s->type, key.type ))
++            s->status == key.status && s->handle == key.handle && s->timeout == key.timeout && !strcmp( s->type, key.type ))
 +        {
 +            s->calls++;
 +            return;
@@ -310,10 +312,10 @@ index 1938eb7..3567d23 100644
 +            if (select_stats[i].calls != ~0u && (top == ARRAY_SIZE(select_stats) || select_stats[i].calls > select_stats[top].calls))
 +                top = i;
 +        if (top == ARRAY_SIZE(select_stats)) break;
-+        fprintf( stderr, " [%u x thread %04x of process %04x (linux %d) %s %u handles %s flags %x %s -> %08x]",
++        fprintf( stderr, " [%u x thread %04x of process %04x (linux %d) %s %u handles %s %08x flags %x %s -> %08x]",
 +                 select_stats[top].calls, select_stats[top].tid, select_stats[top].pid, select_stats[top].unix_tid,
 +                 select_stats[top].op < ARRAY_SIZE(ops) ? ops[select_stats[top].op] : "?", select_stats[top].handles,
-+                 select_stats[top].type[0] ? select_stats[top].type : "-", select_stats[top].flags,
++                 select_stats[top].type[0] ? select_stats[top].type : "-", select_stats[top].handle, select_stats[top].flags,
 +                 timeouts[select_stats[top].timeout], select_stats[top].status );
 +        select_stats[top].calls = ~0u;  /* printed */
 +    }
@@ -326,7 +328,7 @@ index 1938eb7..3567d23 100644
  DECL_HANDLER(select)
  {
      union select_op select_op;
-@@ -2096,6 +2197,7 @@ DECL_HANDLER(select)
+@@ -2096,6 +2199,7 @@ DECL_HANDLER(select)
      }
  
      reply->signaled = select_on( &select_op, op_size, req->cookie, req->flags, req->timeout );
