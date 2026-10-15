@@ -1,0 +1,194 @@
+# Builds Thor-tuned DXVK as ARM64X DLLs and packages them as a Winlator
+# content file (.wcp) for the Thor Forever app. Nothing is published; each
+# build is a downloadable workflow artifact for on-device testing.
+#
+# Why ARM64X: in the app, WoW's native ARM64 client and the x64 Battle.net
+# (run through an emulator as ARM64EC) load the same system32 DLLs. An
+# ARM64X DLL carries both kinds of code in one file. The native half is
+# the tuned build (ARMv8.2 atomics, Cortex-X3 tuning, thin LTO), the same
+# as the "2.6.2-thor" build in build-dxvk.yml. The ARM64EC half, only used
+# by Battle.net, has the same CPU flags but no LTO: lld cannot yet resolve
+# the runtime calls that LTO adds on the ARM64EC side. syswow64 gets the
+# official 32-bit DLLs of the same DXVK release.
+name: Build DXVK ARM64X
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-dxvk-arm64x.yml'
+      - 'tools/link-arm64x.sh'
+      - 'patches/dxvk-*.patch'
+
+permissions:
+  contents: read
+
+jobs:
+  dxvk:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: '2.6.2-thor-arm64x'
+            dxvk_ref: v2.6.2
+            patches: dxvk-arm64-toolchain.patch dxvk-frame-log.patch
+          # Newest DXVK. It builds without the libc++ fix the 2.x
+          # releases need. 2.7.1 did not start on the old Wine; this
+          # tests whether a newer DXVK runs on the app's Wine.
+          - name: '3.1.1-thor-arm64x'
+            dxvk_ref: v3.1.1
+            patches: ''
+    env:
+      LLVM_MINGW: llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64
+      CPU_ARGS: "'-march=armv8.2-a+fp16+dotprod+rcpc', '-mtune=cortex-x3'"
+      DLLS: d3d8 d3d9 d3d10core d3d11 dxgi
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y glslang-tools ninja-build zstd
+          pip install --user meson
+
+      - name: Download llvm-mingw
+        run: |
+          curl -fsSL -o llvm-mingw.tar.xz \
+            "https://github.com/mstorsjo/llvm-mingw/releases/download/20260922/${LLVM_MINGW}.tar.xz"
+          tar -xf llvm-mingw.tar.xz
+          echo "$PWD/${LLVM_MINGW}/bin" >> "$GITHUB_PATH"
+
+      - name: Fetch DXVK
+        run: |
+          git clone -q --depth 1 --branch "${{ matrix.dxvk_ref }}" \
+            --recurse-submodules --shallow-submodules https://github.com/doitsujin/dxvk.git dxvk
+          git -C dxvk log -1 --format='DXVK %H %cd'
+          git -C dxvk submodule status
+          ver="${{ matrix.dxvk_ref }}"
+          curl -fsSL -o official.tar.gz \
+            "https://github.com/doitsujin/dxvk/releases/download/$ver/dxvk-${ver#v}.tar.gz"
+          mkdir official && tar -xzf official.tar.gz -C official --strip-components=1
+
+      - name: Apply patches
+        run: |
+          for patch in ${{ matrix.patches }}; do
+            git -C dxvk apply --verbose "$GITHUB_WORKSPACE/patches/$patch"
+          done
+
+      - name: Configure
+        run: |
+          bin="$PWD/${LLVM_MINGW}/bin"
+          for target in aarch64 arm64ec; do
+            cat > "$target.ini" <<INI
+          [binaries]
+          c = '$bin/$target-w64-mingw32-clang'
+          cpp = '$bin/$target-w64-mingw32-clang++'
+          ar = '$bin/$target-w64-mingw32-ar'
+          strip = '$bin/$target-w64-mingw32-strip'
+          windres = '$bin/$target-w64-mingw32-windres'
+          widl = '$bin/$target-w64-mingw32-widl'
+
+          [built-in options]
+          c_args = [$CPU_ARGS]
+          cpp_args = ['-include', 'algorithm', $CPU_ARGS]
+
+          [properties]
+          needs_exe_wrapper = true
+
+          [host_machine]
+          system = 'windows'
+          cpu_family = 'aarch64'
+          cpu = 'aarch64'
+          endian = 'little'
+          INI
+          done
+          cd dxvk
+          meson setup build-aarch64 --cross-file ../aarch64.ini --buildtype release \
+            -Dbuild_id=false -Db_lto=true -Db_lto_mode=thin
+          meson setup build-arm64ec --cross-file ../arm64ec.ini --buildtype release \
+            -Dbuild_id=false
+
+      - name: Build
+        run: |
+          targets=""
+          for dll in $DLLS; do
+            dir=$dll; [ "$dll" = d3d10core ] && dir=d3d10
+            targets="$targets src/$dir/$dll.dll"
+          done
+          ninja -C dxvk/build-aarch64 $targets
+          ninja -C dxvk/build-arm64ec $targets
+          echo "TARGETS=$targets" >> "$GITHUB_ENV"
+
+      - name: Link ARM64X
+        run: |
+          mkdir -p pkg/system32 pkg/syswow64
+          for target in $TARGETS; do
+            dll=$(basename "$target")
+            sh tools/link-arm64x.sh dxvk/build-aarch64 dxvk/build-arm64ec "$target" "$PWD/$dll"
+            aarch64-w64-mingw32-strip -o "pkg/system32/$dll" "$dll"
+            cp "official/x32/$dll" "pkg/syswow64/$dll"
+          done
+
+      - name: Check
+        run: |
+          cd pkg
+          for dll in system32/*.dll; do
+            llvm-readobj --file-headers "$dll" | grep -q 'IMAGE_FILE_MACHINE_ARM64X' \
+              || { echo "$dll is not ARM64X"; exit 1; }
+            # Both halves must export the same functions as the native build.
+            native=$(llvm-readobj --coff-exports "../dxvk/build-aarch64/src/"*/"$(basename "$dll")" | grep -c 'Name:')
+            both=$(llvm-readobj --coff-exports "$dll" | grep -c 'Name:')
+            echo "$dll: $native native exports, $both in the ARM64X file"
+            [ "$both" -eq $((native * 2)) ] || { echo "$dll: export count mismatch"; exit 1; }
+          done
+          # Single-instruction atomics (LSE) show the ARMv8.2 tuning is in.
+          echo "LSE atomics in d3d11.dll: $(llvm-objdump -d system32/d3d11.dll | grep -c -E '\s(ldadd|cas|swp|ldclr|ldset)(a|l|al)?[bh]?\s')"
+          file system32/*.dll syswow64/*.dll
+
+      - name: Package
+        run: |
+          name="${{ matrix.name }}"
+          cd pkg
+          python3 - "$name" "$DLLS" <<'PY'
+          import json, sys
+          name, dlls = sys.argv[1], sys.argv[2].split()
+          files = []
+          for folder in ("system32", "syswow64"):
+              for dll in dlls:
+                  files.append({"source": f"{folder}/{dll}.dll",
+                                "target": "${" + folder + "}/" + dll + ".dll"})
+          profile = {
+              "type": "DXVK",
+              "versionName": name,
+              "versionCode": 1,
+              "description": "DXVK " + name.split("-")[0] + " tuned for the AYN Thor: "
+                             "ARM64X (native ARM64 plus ARM64EC) for WoW and Battle.net",
+              "files": files,
+          }
+          json.dump(profile, open("profile.json", "w"), indent=2)
+          PY
+          {
+            echo "build=dxvk-$name"
+            echo "dxvk_ref=${{ matrix.dxvk_ref }}"
+            echo "dxvk_commit=$(git -C ../dxvk rev-parse HEAD)"
+            echo "repo_commit=$GITHUB_SHA"
+            echo "toolchain=$LLVM_MINGW"
+            echo "glslang=$(glslangValidator --version | head -1)"
+            echo "patches=${{ matrix.patches }}"
+            echo "cpu_args=$CPU_ARGS"
+            echo "native_half=thin LTO"
+            echo "arm64ec_half=no LTO"
+            echo "syswow64=official dxvk ${{ matrix.dxvk_ref }} x32"
+          } > BUILD-INFO.txt
+          sha256sum system32/*.dll syswow64/*.dll > SHA256SUMS.txt
+          tar -cf - profile.json system32 syswow64 | zstd -19 -q -o "../dxvk-$name.wcp"
+          cd ..
+          cat pkg/profile.json pkg/BUILD-INFO.txt pkg/SHA256SUMS.txt
+          sha256sum "dxvk-$name.wcp"
+          mkdir out && cp "dxvk-$name.wcp" pkg/BUILD-INFO.txt pkg/SHA256SUMS.txt out/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dxvk-${{ matrix.name }}
+          path: out/
