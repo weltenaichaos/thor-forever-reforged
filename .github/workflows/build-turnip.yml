@@ -24,9 +24,18 @@ jobs:
           # cache turned on. Isolates the cache's effect.
           - name: tested-base-cache
             mesa_ref: fe067b17d908d8f02e88ef3c4433ec5fbb66b2a9
+            android_strict: 'true'
           # Current stable Mesa with the same scheduler fix.
           - name: mesa-26.2.3-cache
             mesa_ref: mesa-26.2.3
+            android_strict: 'true'
+          # Same, with Mesa's Android extension filter off. With the filter
+          # on, platform-sdk-version=28 hides KHR extensions Android allowed
+          # later, such as VK_KHR_load_store_op_none (needed by DXVK 3.x),
+          # VK_KHR_maintenance5 and VK_KHR_present_wait.
+          - name: mesa-26.2.3-nostrict
+            mesa_ref: mesa-26.2.3
+            android_strict: 'false'
     env:
       NDK_VERSION: r27d
     steps:
@@ -86,7 +95,8 @@ jobs:
             -Dglx=disabled -Degl=disabled -Dgbm=disabled -Dllvm=disabled \
             -Dgles1=disabled -Dgles2=disabled -Dopengl=false -Dbuild-tests=false \
             -Dvideo-codecs= -Dbuildtype=release -Dzstd=disabled -Dexpat=disabled \
-            -Dzlib=enabled -Dshader-cache=enabled
+            -Dzlib=enabled -Dshader-cache=enabled \
+            -Dandroid-strict=${{ matrix.android_strict }}
 
       - name: Build
         run: ninja -C mesa/build src/freedreno/vulkan/libvulkan_freedreno.so
@@ -104,9 +114,30 @@ jobs:
             echo "ndk=$NDK_VERSION"
             echo "patches=turnip-kill-local-baryf.patch"
             echo "shader_cache=enabled"
+            echo "android_strict=${{ matrix.android_strict }}"
           } > out/BUILD-INFO.txt
+          # meta.json lets the app's "install driver from file" accept the
+          # downloaded artifact zip as it is.
+          cat > out/meta.json <<JSON
+          {
+            "schemaVersion": 1,
+            "name": "thor-turnip-${{ matrix.name }}",
+            "description": "Turnip from Mesa ${{ matrix.mesa_ref }}, android_strict=${{ matrix.android_strict }}",
+            "author": "Mesa",
+            "packageVersion": "1",
+            "vendor": "Mesa",
+            "driverVersion": "${{ matrix.mesa_ref }}",
+            "minApi": 28,
+            "libraryName": "libvulkan_freedreno.so"
+          }
+          JSON
           (cd out && sha256sum libvulkan_freedreno.so > SHA256SUMS.txt)
-          cat out/BUILD-INFO.txt out/SHA256SUMS.txt
+          cat out/BUILD-INFO.txt out/SHA256SUMS.txt out/meta.json
+          python3 -c 'import json; json.load(open("out/meta.json"))'
+          # Show whether the extension DXVK 3.x needs is allowed by the
+          # Android filter (the table is gone when the filter is off).
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-nm" \
+            mesa/build/src/freedreno/vulkan/libvulkan_freedreno.so | grep vk_android_allowed || echo "no Android extension filter"
           "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" -d out/libvulkan_freedreno.so | grep NEEDED
 
       - uses: actions/upload-artifact@v4
