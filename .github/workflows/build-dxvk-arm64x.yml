@@ -33,15 +33,32 @@ jobs:
           - name: '2.6.2-thor-arm64x'
             dxvk_ref: v2.6.2
             patches: dxvk-arm64-toolchain.patch dxvk-frame-log.patch
+            cpu_args: "'-march=armv8.2-a+fp16+dotprod+rcpc', '-mtune=cortex-x3'"
+            native_meson: -Db_lto=true -Db_lto_mode=thin
+          # Two steps back from the tuned build, to find what breaks it on
+          # the device: the same CPU tuning without LTO, and a plain build
+          # without CPU tuning or the frame log.
+          - name: '2.6.2-thor-nolto-arm64x'
+            dxvk_ref: v2.6.2
+            patches: dxvk-arm64-toolchain.patch dxvk-frame-log.patch
+            cpu_args: "'-march=armv8.2-a+fp16+dotprod+rcpc', '-mtune=cortex-x3'"
+            native_meson: ''
+          - name: '2.6.2-plain-arm64x'
+            dxvk_ref: v2.6.2
+            patches: dxvk-arm64-toolchain.patch
+            cpu_args: ''
+            native_meson: ''
           # Newest DXVK. It builds without the libc++ fix the 2.x
           # releases need. 2.7.1 did not start on the old Wine; this
           # tests whether a newer DXVK runs on the app's Wine.
           - name: '3.1.1-thor-arm64x'
             dxvk_ref: v3.1.1
             patches: ''
+            cpu_args: "'-march=armv8.2-a+fp16+dotprod+rcpc', '-mtune=cortex-x3'"
+            native_meson: -Db_lto=true -Db_lto_mode=thin
     env:
       LLVM_MINGW: llvm-mingw-20260922-ucrt-ubuntu-22.04-x86_64
-      CPU_ARGS: "'-march=armv8.2-a+fp16+dotprod+rcpc', '-mtune=cortex-x3'"
+      CPU_ARGS: ${{ matrix.cpu_args }}
       DLLS: d3d8 d3d9 d3d10core d3d11 dxgi
     steps:
       - uses: actions/checkout@v4
@@ -105,7 +122,7 @@ jobs:
           done
           cd dxvk
           meson setup build-aarch64 --cross-file ../aarch64.ini --buildtype release \
-            -Dbuild_id=false -Db_lto=true -Db_lto_mode=thin
+            -Dbuild_id=false ${{ matrix.native_meson }}
           meson setup build-arm64ec --cross-file ../arm64ec.ini --buildtype release \
             -Dbuild_id=false
 
@@ -177,7 +194,7 @@ jobs:
             echo "glslang=$(glslangValidator --version | head -1)"
             echo "patches=${{ matrix.patches }}"
             echo "cpu_args=$CPU_ARGS"
-            echo "native_half=thin LTO"
+            echo "native_meson=${{ matrix.native_meson }}"
             echo "arm64ec_half=no LTO"
             echo "syswow64=official dxvk ${{ matrix.dxvk_ref }} x32"
           } > BUILD-INFO.txt
