@@ -14,6 +14,11 @@ name: Build DXVK ARM64X
 
 on:
   workflow_dispatch:
+    inputs:
+      symbolize:
+        description: 'Crash addresses to look up, as in a Wine backtrace (for example d3d11+0x147394)'
+        required: false
+        default: ''
   push:
     paths:
       - '.github/workflows/build-dxvk-arm64x.yml'
@@ -145,6 +150,24 @@ jobs:
             sh tools/link-arm64x.sh dxvk/build-aarch64 dxvk/build-arm64ec "$target" "$PWD/$dll"
             aarch64-w64-mingw32-strip -o "pkg/system32/$dll" "$dll"
             cp "official/x32/$dll" "pkg/syswow64/$dll"
+          done
+
+      # Wine backtraces name a module and an offset. This prints the
+      # function, source line and code at each offset from the unstripped
+      # DLLs of this exact build.
+      - name: Symbolize
+        if: ${{ inputs.symbolize != '' }}
+        env:
+          ADDRESSES: ${{ inputs.symbolize }}
+        run: |
+          for entry in $ADDRESSES; do
+            dll="${entry%%+*}.dll"
+            rva="${entry#*+}"
+            base=$(llvm-readobj --file-headers "$dll" | awk '/ImageBase:/ {print $2; exit}')
+            addr=$(printf '0x%x' $((base + rva)))
+            echo "== $entry -> $addr"
+            llvm-symbolizer --obj="$dll" -f -C -i "$addr"
+            llvm-objdump -d --no-show-raw-insn --start-address=$((addr - 0x60)) --stop-address=$((addr + 0x20)) "$dll" | tail -n 32
           done
 
       - name: Check
